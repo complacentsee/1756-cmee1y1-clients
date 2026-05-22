@@ -16,17 +16,18 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.7.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.7.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.7.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.8.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.8.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.8.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
 the `typetest` cross-type sweep (scalars × 11 + STRING + DINT[1-D]
-+ BOOL[] + DINT[2-D] + DINT[3-D]), and the v0.7.0 `conntest`
-class-3 round-trip — all **byte-identically** modulo timings.
-See [`runprobe.py`](runprobe.py) for the shared cross-language
-runner.
++ BOOL[] + DINT[2-D] + DINT[3-D]), the v0.7.0 `conntest` class-3
+round-trip, the v0.8.0 `pooltest` (M-worker fanout + `--batch`),
+and the v0.8.0 `routedident` (Unconnected_Send routing) — all
+**byte-identically** modulo timings.  See [`runprobe.py`](runprobe.py)
+for the shared cross-language runner.
 
 Class-3 connected messaging (`TxRx*` / `txrx_*`) is **functional**
 as of v0.7.0: each SDK builds Large Forward Open + Forward_Close
@@ -37,10 +38,30 @@ missing from the cm1756 image.  Wire format in
 [`docs/protocol.md`](docs/protocol.md) "Connected messaging —
 wire format".
 
-Known v0.7.0 limitation: small-buffer transport only (~500 B
-envelope, same as `MessageSend`).  The 4002-byte connected-data
-path via chip mailbox 0x204 is v0.8 territory — see
-[`docs/v0.8-large-buffer-re.md`](docs/v0.8-large-buffer-re.md).
+**v0.8.0 (current)** adds:
+
+- Structured CIP-layer errors — `BP_ERR_CIP_STATUS` /
+  `*ocxbp.CIPError` / `bpclient.BpCipError` carrying
+  `(service, status, ext_status, slot)` instead of collapsing
+  to `BP_ERR_GENERIC`.  See [`docs/error-codes.md`](docs/error-codes.md).
+- Per-slot **connection pool** with idle keepalive — `pool_open` /
+  `pool_txrx` / `pool_close` mirror sibling apex2d's
+  `slot_pool_keepalive_idle`.
+- **`pool_batch`** — single-call fan-out across the pool with
+  `min(pool.size, N)` worker threads.
+- **Multi-hop routes via Unconnected_Send (0x52)** — helpers
+  (`bp_build_unconnected_send` / `cip.BuildUnconnectedSend` /
+  `bpclient.build_unconnected_send`) assemble the routed
+  envelope.  See
+  [`docs/protocol.md#multi-hop-routes--unconnected_send-service-0x52`](docs/protocol.md).
+
+Inherited limitation (unchanged in v0.8.0): small-buffer transport
+only (~500 B envelope, same as `MessageSend`).  The 4002-byte
+connected-data path via chip mailbox 0x204 is **shelved** — the
+operational blocker (rootless container can't satisfy the kernel's
+shram single-mapper exclusion held by bpServer) makes it
+unreachable from a non-privileged userland.  Full Phase A static
+RE in [`docs/v0.8-large-buffer-re.md`](docs/v0.8-large-buffer-re.md).
 
 ## What this gives you
 

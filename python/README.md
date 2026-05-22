@@ -87,14 +87,19 @@ BP_PLC_PATH=P:1,S:2 pytest tests/                      # + end-to-end
 
 ## Status
 
-v0.7.0. Outbound tag I/O is fully functional including the
-typed-array + BOOL[] + STRING surface (v0.6.0) and class-3
-connected messaging (v0.7.0).  `txrx_open` / `txrx_msg` /
-`txrx_close` build Large Forward Open + Forward_Close internally
-and route through `message_send` — see
-[`docs/protocol.md`](../docs/protocol.md) "Connected messaging —
-wire format".
+v0.8.0.  Outbound tag I/O fully functional including arrays + BOOL[]
++ STRING (v0.6.0), class-3 connected messaging (v0.7.0), and the
+v0.8.0 quality-of-life additions:
 
-Known v0.7.0 limitation: small-buffer transport (~500 B envelope
+- Structured CIP-layer errors (`BpCipError` with `.service /
+  .status / .ext_status / .slot`).
+- `pool_open` / `pool_txrx` / `pool_batch` / `pool_close` — per-slot
+  pool with idle keepalive thread.
+- `bpclient.build_unconnected_send` + `bpclient.port_segment` for
+  multi-hop routes via svc 0x52.
+
+Inherited limitation: small-buffer transport (~500 B envelope
 inherited from `message_send`).  The 4002-byte chip-mailbox-0x204
-path is v0.8 work — see [`docs/v0.8-large-buffer-re.md`](../docs/v0.8-large-buffer-re.md).
+path is shelved per [`docs/v0.8-large-buffer-re.md`](../docs/v0.8-large-buffer-re.md)
+(operational blocker on rootless containers, not a missing-symbol
+issue).

@@ -34,7 +34,7 @@ target_link_libraries(bpclient PRIVATE pthread rt)
 set_target_properties(bpclient PROPERTIES
     PUBLIC_HEADER include/bpclient.h
     SOVERSION 0
-    VERSION 0.7.0
+    VERSION 0.8.0
 )
 
 # Static library (same sources, different target)

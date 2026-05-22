@@ -105,7 +105,8 @@ go/
 │   ├── module.go              switch / LED / display
 │   ├── message.go             MessageSend (UCMM)
 │   ├── conn.go                TxRxOpen/Msg/Close (v0.7.0+ LFO via MessageSend)
-│   ├── errors.go              BPErr* constants + sentinels + ErrCode helper
+│   ├── pool.go                PoolOpen/TxRx/Batch/Close (v0.8.0+)
+│   ├── errors.go              BPErr* constants + sentinels + CIPError (v0.8.0+)
 │   ├── shm/                   IPC layer (cgo for POSIX sems)
 │   │   ├── consts.go
 │   │   ├── shm.go             Open/Close, slot reserve/release
@@ -113,6 +114,7 @@ go/
 │   │   ├── posix_sem.go       cgo wrapper for sem_open/post/wait/...
 │   │   └── posix_sem_stub.go  non-cgo stub for vet/build on dev hosts
 │   └── cip/                   per-opcode wire encoders/decoders
+│       └── route.go           BuildUnconnectedSend (v0.8.0+ multi-hop)
 └── cmd/                       diagnostic CLI binaries (one main.go per tool)
 ```
 
@@ -130,14 +132,17 @@ its own slot across all 16 slots, gated by the cross-process
 
 ## Status
 
-v0.7.0. Outbound tag I/O is fully functional including the
-typed-array + BOOL[] + STRING surface (v0.6.0) and class-3
-connected messaging (v0.7.0).  `TxRxOpen` / `TxRxMsg` / `TxRxClose`
-build Large Forward Open + Forward_Close internally and route
-through `MessageSend` — see
-[`docs/protocol.md`](../docs/protocol.md) "Connected messaging —
-wire format".
+v0.8.0.  Outbound tag I/O fully functional including arrays + BOOL[]
++ STRING (v0.6.0), class-3 connected messaging (v0.7.0), and the
+v0.8.0 quality-of-life additions:
 
-Known v0.7.0 limitation: small-buffer transport (~500 B envelope
+- Structured CIP-layer errors (`*CIPError` via `errors.As`).
+- `PoolOpen` / `PoolTxRx` / `PoolBatch` / `PoolClose` — per-slot
+  pool with keepalive goroutine.
+- `cip.BuildUnconnectedSend` for multi-hop routes via svc 0x52.
+
+Inherited limitation: small-buffer transport (~500 B envelope
 inherited from `MessageSend`).  The 4002-byte chip-mailbox-0x204
-path is v0.8 work — see [`docs/v0.8-large-buffer-re.md`](../docs/v0.8-large-buffer-re.md).
+path is shelved per [`docs/v0.8-large-buffer-re.md`](../docs/v0.8-large-buffer-re.md)
+(operational blocker on rootless containers, not a missing-symbol
+issue).

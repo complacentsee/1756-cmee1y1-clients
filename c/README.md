@@ -19,7 +19,7 @@ cmake --build build --parallel
 ```
 
 Produces:
-- `build/libbpclient.so.0.7.0` — shared library
+- `build/libbpclient.so.0.8.0` — shared library
 - `build/libbpclient.a` — static library
 - `build/tagtest` — the canonical smoke test executable
   (plus the other diagnostic binaries listed in
@@ -116,9 +116,11 @@ c/
 │   ├── access.c              AccessTagData + scalar R/W helpers
 │   ├── message.c             OCXcip_MessageSend (UCMM CIP)
 │   ├── conn.c                bp_client_txrx_* (LFO + MessageSend, v0.7.0+)
+│   ├── pool.c                bp_client_pool_* (pool + keepalive + batch, v0.8.0+)
+│   ├── route.c               bp_build_unconnected_send (multi-hop, v0.8.0+)
 │   ├── identity.c            OCXcip_GetIdObject / GetDeviceIdObject
 │   ├── module.c              modutil helpers (switch / display / LED)
-│   ├── errors.c              bp_strerror()
+│   ├── errors.c              bp_strerror() + bp_cip_status_string() (v0.8.0+)
 │   └── proto.h               internal: layout constants
 ├── examples/tagtest.c
 ├── CMakeLists.txt
@@ -138,6 +140,11 @@ semaphore (`/bpShm`) and a process-local `pthread_mutex_t`.
 All public functions return `int`. `BP_OK` (0) is success. Any
 negative value is an error matching the `BP_ERR_*` constants in
 `bpclient.h` — convert to a string with `bp_strerror(rc)`.
+
+CIP-layer rejections (`BP_ERR_CIP_STATUS`, v0.8.0+) carry structured
+fields available via `bp_client_last_cip_error()`; translate the
+`(status, ext_status)` pair to a message with
+`bp_cip_status_string()`.
 
 `bp_tagdb_access` and the convenience helpers set per-request
 `result` fields with CIP General Status codes (0 = ok, 0x05 = path
