@@ -4,6 +4,12 @@ Outbound tag I/O against the 1756-CMEE1Y1 backplane via the userland
 wrapper IPC. Pure C11, depends only on `libpthread` + `librt` (both
 in glibc).
 
+> One of three implementations of the same wire protocol — the
+> [Go SDK](../go/) and [Python SDK](../python/) live alongside this
+> one. All three pass `tagtest` + `msgprobe` byte-identically; see
+> [`runprobe.py`](../runprobe.py) for the shared cross-language
+> runner.
+
 ## Build
 
 ```sh
@@ -13,9 +19,12 @@ cmake --build build --parallel
 ```
 
 Produces:
-- `build/libbpclient.so.0.1.0` — shared library
+- `build/libbpclient.so.0.5.0` — shared library
 - `build/libbpclient.a` — static library
 - `build/tagtest` — the canonical smoke test executable
+  (plus the other diagnostic binaries listed in
+  [`CMakeLists.txt`](CMakeLists.txt): `msgprobe`, `identity`,
+  `connidentity`, `pathprobe`, `actnodes`, `modutil`, etc.)
 
 System install:
 

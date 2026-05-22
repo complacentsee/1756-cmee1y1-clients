@@ -22,6 +22,25 @@ reverse-engineering work in `complacentsee/rockwell-bpgateway-re`:
 - Error codes: `include/ocxbpapi.h` `OCX_ERR_*` constants
 - Path-string format quirk: `tools/probe_path_format.py`
 
+## Implementations
+
+Each language SDK implements directly against this spec — no shared
+code, no generated bindings. The dispatcher / opcode layout / field
+offsets are duplicated faithfully; the three are kept honest via
+the `runprobe.py` byte-identical diff harness.
+
+| Language | Module / package | Dispatcher | Per-opcode encoders | Public API |
+|---|---|---|---|---|
+| C        | `libbpclient` (`c/`) | [`c/src/client.c`](../c/src/client.c) (`bp_client_call`) | `c/src/*.c` (one file per opcode area) | [`c/include/bpclient.h`](../c/include/bpclient.h) |
+| Go       | `.../go/ocxbp` | [`go/ocxbp/shm/call.go`](../go/ocxbp/shm/call.go) (`Client.Call`) | [`go/ocxbp/cip/`](../go/ocxbp/cip/) (one file per opcode area) | [`go/ocxbp/`](../go/ocxbp/) (`Client`, `TagDB`, …) |
+| Python   | `bpclient` (`python/`) | [`python/src/bpclient/_ipc.py`](../python/src/bpclient/_ipc.py) (`Client.call`) | [`python/src/bpclient/client.py`](../python/src/bpclient/client.py) + per-area dataclasses | [`python/src/bpclient/__init__.py`](../python/src/bpclient/__init__.py) (`Client`, `TagDB`, …) |
+
+If you change a field offset, opcode size, or payload layout in
+this doc, the same change must land in each implementation's
+dispatcher / encoders. `py runprobe.py --image
+bpclient-{c,go,python}-tagtest:dev tagtest` + the `msgprobe`
+slot-sweep are the canonical regression check.
+
 ## Transport: POSIX shared memory + named semaphores
 
 ### `/dev/shm/bpShmem` — the slot array

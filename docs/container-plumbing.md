@@ -69,20 +69,23 @@ effect (Docker uses native arch automatically).
 
 ## docker-compose snippets
 
-### Python
+All three language images install their CLI binaries to
+`/usr/local/bin/` (entrypoint defaults to `tagtest`). The
+compose snippets below differ only in `build:` / `image:` —
+everything else is identical.
+
+### C
 
 ```yaml
 services:
   bpclient:
-    build: ./python                  # or image: ghcr.io/...
+    build: ./c                       # or image: bpclient-c-tagtest:dev
     ipc: host
     pid: host
     volumes:
       - /dev/shm:/dev/shm
     platform: linux/arm64
-    environment:
-      - BP_PATH=P:1,S:2              # CIP route to your PLC
-    command: python -m bpclient.examples.tagtest --tag OCX_TEST
+    command: ["--path", "P:1,S:2", "--tag", "OCX_TEST"]
 ```
 
 ### Go
@@ -90,29 +93,27 @@ services:
 ```yaml
 services:
   bpclient:
-    build: ./go
+    build: ./go                      # or image: bpclient-go-tagtest:dev
     ipc: host
     pid: host
     volumes:
       - /dev/shm:/dev/shm
     platform: linux/arm64
-    environment:
-      - BP_PATH=P:1,S:2
-    command: /usr/local/bin/tagtest -path "P:1,S:2" -tag OCX_TEST
+    command: ["--path", "P:1,S:2", "--tag", "OCX_TEST"]
 ```
 
-### C
+### Python
 
 ```yaml
 services:
   bpclient:
-    build: ./c
+    build: ./python                  # or image: bpclient-python-tagtest:dev
     ipc: host
     pid: host
     volumes:
       - /dev/shm:/dev/shm
     platform: linux/arm64
-    command: /usr/local/bin/tagtest --path "P:1,S:2" --tag OCX_TEST
+    command: ["--path", "P:1,S:2", "--tag", "OCX_TEST"]
 ```
 
 All three are byte-for-byte identical in their `ipc:` / `pid:` /
@@ -121,12 +122,18 @@ All three are byte-for-byte identical in their `ipc:` / `pid:` /
 ## `docker run` equivalents
 
 ```sh
-docker run --rm -it \
+# Direct (builds the image first with c/build_image.py etc.):
+docker run --rm \
     --ipc=host --pid=host \
     -v /dev/shm:/dev/shm \
     --platform linux/arm64 \
-    ghcr.io/complacentsee/1756-cmee1y1-clients-python:latest \
-    python -m bpclient.examples.tagtest
+    bpclient-python-tagtest:dev          # or -c-tagtest / -go-tagtest
+
+# Via the shared cross-language runner (handles plumbing for you):
+py runprobe.py --image bpclient-python-tagtest:dev tagtest
+
+# Different diagnostic in the same image:
+py runprobe.py --image bpclient-go-tagtest:dev msgprobe --slot 1 --req "01 02 20 01 24 01"
 ```
 
 ## Troubleshooting
@@ -179,9 +186,11 @@ GC orphaned slots via its liveness check.
 - **Run as a sidecar.** Your application container and the
   bpclient container share host IPC. They don't need to share
   anything else.
-- **Health checks.** The Python and Go examples expose a `--ping`
-  flag that returns 0 if the IPC is healthy. Wire this to your
-  container orchestrator's `healthcheck:` directive.
+- **Health checks.** A trivial `tagtest --no-write` against a known-
+  responsive PLC slot is the simplest liveness probe (exit 0 = OK,
+  non-zero = bpServer or PLC unreachable). Wire that to your
+  orchestrator's `healthcheck:` directive — there is no
+  dedicated `--ping` flag yet.
 - **Logging.** This SDK logs to stderr only. No log file rotation
   in the SDK itself; your orchestrator's log driver handles that.
 - **Restart policy.** `restart: unless-stopped` is appropriate.

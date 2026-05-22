@@ -8,9 +8,23 @@ cross-referenceable with vendor logs.
 
 Each language SDK maps these to its idiomatic error mechanism:
 
-- **C**: `int` return values. Convert to a string with `bp_strerror(rc)`.
-- **Go**: `Errno int32` type implementing the `error` interface.
-- **Python**: `BackplaneError(code, message)` exception class.
+- **C** ([`c/include/bpclient.h`](../c/include/bpclient.h)): `int`
+  return values; `BP_OK` (0) or a `BP_ERR_*` constant.  Convert to
+  a string with `bp_strerror(rc)`.
+- **Go** ([`go/ocxbp/errors.go`](../go/ocxbp/errors.go)): named
+  sentinels (`ocxbp.ErrParamRange`, `ocxbp.ErrNoFreeSlot`, …)
+  plus `ocxbp.EngineError{Code int}` for engine codes that aren't
+  in the `BP_ERR_*` table.  Use `errors.As` / `errors.Is`.  Map
+  back to the C int with `ocxbp.ErrCode(err)`.
+- **Python** ([`python/src/bpclient/errors.py`](../python/src/bpclient/errors.py)):
+  exception hierarchy rooted at `BpError`; one subclass per
+  `BP_ERR_*` code (`BpParamRange`, `BpNoFreeSlot`, …) plus
+  `BpEngine(code)` for non-`BP_ERR_*` engine codes.  Map back to
+  the C int with `bpclient.err_code(exc)`.
+
+The per-language error names line up so a `BP_ERR_PARAM_RANGE` from
+the engine surfaces as `ocxbp.ErrParamRange` in Go and
+`bpclient.BpParamRange` in Python.
 
 ## Catalog
 
