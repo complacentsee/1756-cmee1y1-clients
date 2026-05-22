@@ -26,7 +26,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY src ./src
 COPY examples ./examples
 COPY tests ./tests
