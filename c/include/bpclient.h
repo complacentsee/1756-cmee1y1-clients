@@ -38,6 +38,11 @@ typedef struct bp_tagdb  bp_tagdb_t;
 #define BP_ERR_NOT_OPEN       -303
 #define BP_ERR_PARAM_RANGE    -305
 #define BP_ERR_SLOT_TOO_LARGE -311
+#define BP_ERR_CIP_STATUS     -400   /* CIP-layer rejection (general_status != 0).
+                                       * Transport succeeded; the PLC's CIP target
+                                       * returned a non-zero general_status.  Fetch
+                                       * the structured fields with
+                                       * bp_client_last_cip_error(). */
 #define BP_ERR_CLIENT_OPEN -101802
 #define BP_ERR_NO_FREE_SLOT -103001
 
@@ -45,6 +50,54 @@ typedef struct bp_tagdb  bp_tagdb_t;
  * a pointer to static storage; never NULL.  Unknown codes return
  * "unknown error". */
 const char *bp_strerror(int rc);
+
+/* ============================================================
+ * Structured CIP-layer errors
+ *
+ * Some SDK calls (the TxRx* connected-messaging family in v0.7.0+,
+ * and any future call that wraps a CIP service request) succeed at
+ * the transport layer but receive a non-zero CIP general_status from
+ * the PLC.  In that case the call returns BP_ERR_CIP_STATUS and the
+ * structured fields can be retrieved by calling
+ * bp_client_last_cip_error() before the next CIP-layer operation on
+ * this client.
+ *
+ * The "service" field is the reply service byte (e.g. 0xDB for an
+ * LFO reply, 0xCE for an FC reply, request_service | 0x80 for any
+ * other CIP service).  "status" is the CIP General Status byte
+ * (table in docs/error-codes.md).  "ext_status" is the first 16-bit
+ * extended-status word (0 if the reply carried no ext-status).
+ * "slot" is the backplane slot the request targeted.
+ * ============================================================ */
+typedef struct {
+    uint8_t  service;     /* reply service byte */
+    uint8_t  status;      /* CIP general_status */
+    uint16_t ext_status;  /* CIP extended_status (0 if absent) */
+    uint8_t  slot;        /* backplane slot that received the request */
+    uint8_t  _reserved[3];
+} bp_cip_status_t;
+
+/* bp_client_last_cip_error
+ *   Fills *out with the most recently recorded CIP-layer rejection
+ *   on this client and returns BP_OK.  Returns BP_ERR_GENERIC if no
+ *   CIP error has been recorded since the last call to this function
+ *   (reading clears the recorded value).
+ *
+ *   Recording is per-client and not thread-local: if two threads call
+ *   different TxRx functions concurrently and both fail at the CIP
+ *   layer, only one of the two CIP errors will be observable.  For
+ *   that case, the BP_ERR_CIP_STATUS return value is still
+ *   distinguishable; callers needing per-call detail should
+ *   serialize CIP-layer calls in that thread or copy the result
+ *   immediately. */
+int bp_client_last_cip_error(bp_client_t *client, bp_cip_status_t *out);
+
+/* bp_cip_status_string
+ *   Returns a human-readable string for a (status, ext_status) pair.
+ *   Returns a pointer to static storage; never NULL.  Unknown pairs
+ *   return "unknown CIP status".  Mirrors the table in
+ *   docs/error-codes.md "Forward_Open / Forward_Close failure modes". */
+const char *bp_cip_status_string(uint8_t status, uint16_t ext_status);
 
 /* ============================================================
  * CIP atomic type codes (low 13 bits of data_type field)

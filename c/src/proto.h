@@ -96,7 +96,16 @@ struct bp_client {
     pthread_mutex_t scan_mu;         /* serializes the slot scan within this process */
     pthread_mutex_t txrx_mu;         /* protects txrx_conns table */
     struct bp_txrx_conn txrx_conns[BP_TXRX_MAX_CONNS];
+    pthread_mutex_t cip_err_mu;      /* protects cip_err* below */
+    int             cip_err_present; /* 1 if cip_err carries a value */
+    bp_cip_status_t cip_err;         /* last CIP-layer rejection on this client */
 };
+
+/* Internal helper exposed across translation units — records a
+ * structured CIP-layer error on the client.  Used by conn.c on
+ * LFO/FC rejections. */
+void bp_record_cip_error(bp_client_t *cl, uint8_t svc, uint8_t status,
+                          uint16_t ext_status, uint8_t slot);
 
 struct bp_tagdb {
     bp_client_t *client;

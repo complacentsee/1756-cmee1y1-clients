@@ -51,6 +51,8 @@ int bp_client_open(bp_client_t **out_client) {
     pthread_mutex_init(&c->scan_mu, NULL);
     /* TxRx connection cache (v0.7.0 small-buffer connected messaging) */
     pthread_mutex_init(&c->txrx_mu, NULL);
+    /* Last-recorded CIP-layer error (BP_ERR_CIP_STATUS path) */
+    pthread_mutex_init(&c->cip_err_mu, NULL);
 
     /* Open the shm-lock semaphore */
     c->sem_shmlock = sem_open(BP_SEM_SHMLOCK, 0);
@@ -94,7 +96,37 @@ void bp_client_close(bp_client_t *c) {
     if (c->shm_fd >= 0) { close(c->shm_fd); c->shm_fd = -1; }
     pthread_mutex_destroy(&c->scan_mu);
     pthread_mutex_destroy(&c->txrx_mu);
+    pthread_mutex_destroy(&c->cip_err_mu);
     free(c);
+}
+
+/* ────────── CIP-layer error recording / retrieval ───────────── */
+
+void bp_record_cip_error(bp_client_t *cl, uint8_t svc, uint8_t status,
+                          uint16_t ext_status, uint8_t slot) {
+    if (!cl) return;
+    pthread_mutex_lock(&cl->cip_err_mu);
+    cl->cip_err.service    = svc;
+    cl->cip_err.status     = status;
+    cl->cip_err.ext_status = ext_status;
+    cl->cip_err.slot       = slot;
+    cl->cip_err._reserved[0] = 0;
+    cl->cip_err._reserved[1] = 0;
+    cl->cip_err._reserved[2] = 0;
+    cl->cip_err_present    = 1;
+    pthread_mutex_unlock(&cl->cip_err_mu);
+}
+
+int bp_client_last_cip_error(bp_client_t *cl, bp_cip_status_t *out) {
+    if (!cl || !out) return BP_ERR_NULL_ARG;
+    pthread_mutex_lock(&cl->cip_err_mu);
+    int present = cl->cip_err_present;
+    if (present) {
+        *out = cl->cip_err;
+        cl->cip_err_present = 0;
+    }
+    pthread_mutex_unlock(&cl->cip_err_mu);
+    return present ? BP_OK : BP_ERR_GENERIC;
 }
 
 /* Drain any pending posts on a semaphore (best effort). */

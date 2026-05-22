@@ -200,13 +200,15 @@ int bp_client_txrx_open(bp_client_t *cl, const bp_conn_spec_t *spec,
     if (msg.resp_len < 12 ||
         (resp[0] != 0xDB && resp[0] != 0xD4) ||
         resp[2] != 0x00) {
-        uint8_t st = msg.resp_len >= 3 ? resp[2] : 0xFF;
+        uint8_t svc = msg.resp_len ? resp[0] : 0;
+        uint8_t st  = msg.resp_len >= 3 ? resp[2] : 0xFF;
         uint16_t ext = (msg.resp_len >= 6 && resp[3])
                         ? (uint16_t)(resp[4] | (resp[5] << 8)) : 0;
+        bp_record_cip_error(cl, svc, st, ext, slot);
         fprintf(stderr, "[bp_client_txrx_open] LFO CIP failure: "
-                        "svc=0x%02x status=0x%02x ext=0x%04x slot=%u\n",
-                msg.resp_len ? resp[0] : 0, st, ext, slot);
-        return BP_ERR_GENERIC;
+                        "svc=0x%02x status=0x%02x ext=0x%04x slot=%u (%s)\n",
+                svc, st, ext, slot, bp_cip_status_string(st, ext));
+        return BP_ERR_CIP_STATUS;
     }
 
     uint32_t ot_conn_id = bp_ld_u32(resp + 4);
@@ -336,11 +338,15 @@ int bp_client_txrx_close(bp_client_t *cl, const bp_conn_spec_t *spec) {
     if (rc != BP_OK) return rc;
 
     if (msg.resp_len < 4 || resp[0] != 0xCE || resp[2] != 0x00) {
-        uint8_t st = msg.resp_len >= 3 ? resp[2] : 0xFF;
+        uint8_t svc = msg.resp_len ? resp[0] : 0;
+        uint8_t st  = msg.resp_len >= 3 ? resp[2] : 0xFF;
+        uint16_t ext = (msg.resp_len >= 6 && resp[3])
+                        ? (uint16_t)(resp[4] | (resp[5] << 8)) : 0;
+        bp_record_cip_error(cl, svc, st, ext, slot);
         fprintf(stderr, "[bp_client_txrx_close] FC CIP failure: "
-                        "svc=0x%02x status=0x%02x slot=%u serial=0x%04x\n",
-                msg.resp_len ? resp[0] : 0, st, slot, conn_serial);
-        return BP_ERR_GENERIC;
+                        "svc=0x%02x status=0x%02x ext=0x%04x slot=%u serial=0x%04x (%s)\n",
+                svc, st, ext, slot, conn_serial, bp_cip_status_string(st, ext));
+        return BP_ERR_CIP_STATUS;
     }
     return BP_OK;
 }

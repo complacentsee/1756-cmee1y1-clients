@@ -30,6 +30,7 @@ const (
 	BPErrNotOpen     = -303
 	BPErrParamRange  = -305
 	BPErrSlotTooLarge = -311
+	BPErrCIPStatus    = -400
 	BPErrClientOpen   = -101802
 	BPErrNoFreeSlot   = -103001
 )
@@ -61,6 +62,166 @@ type EngineError struct {
 func (e EngineError) Error() string {
 	return fmt.Sprintf("ocxbp: engine errorcode %d (0x%x): %s",
 		e.Code, uint32(e.Code), Strerror(e.Code))
+}
+
+// CIPError carries the structured fields of a CIP-layer rejection —
+// the request transport succeeded but the PLC returned a non-zero
+// general_status.  Use errors.As to extract:
+//
+//	var ce *ocxbp.CIPError
+//	if errors.As(err, &ce) {
+//	    if ce.Status == 0x01 && ce.ExtStatus == 0x0100 {
+//	        // "Connection in use" — caller can retry after idle timeout
+//	    }
+//	}
+//
+// Service is the reply service byte (0xDB for LFO reply, 0xCE for
+// FC reply, request_service|0x80 for other services).  Slot is the
+// backplane slot that received the request.  ErrCode(*CIPError)
+// returns BPErrCIPStatus (-400).
+type CIPError struct {
+	Service   uint8
+	Status    uint8
+	ExtStatus uint16
+	Slot      uint8
+}
+
+func (e *CIPError) Error() string {
+	return fmt.Sprintf("ocxbp: CIP rejection svc=0x%02x status=0x%02x ext=0x%04x slot=%d (%s)",
+		e.Service, e.Status, e.ExtStatus, e.Slot,
+		CIPStatusString(e.Status, e.ExtStatus))
+}
+
+// CIPStatusString returns a human-readable string for a (status,
+// ext_status) pair.  Mirrors c/src/errors.c::bp_cip_status_string —
+// keep in sync.
+func CIPStatusString(status uint8, ext uint16) string {
+	switch status {
+	case 0x00:
+		return "success"
+	case 0x01:
+		switch ext {
+		case 0x0100:
+			return "connection in use (stale conn from prior session — let PLC idle-time-out ~40s or restart bpServer)"
+		case 0x0103:
+			return "transport class unsupported (controller firmware rejected class 0xA3)"
+		case 0x0107:
+			return "connection ID not found in Forward_Close (PLC already cleaned up; safe to ignore on close)"
+		case 0x0113:
+			return "no more connections available on target"
+		case 0x0114:
+			return "vendor id or product code mismatch in Forward_Close"
+		case 0x0115:
+			return "device type mismatch in Forward_Close"
+		case 0x0116:
+			return "revision mismatch in Forward_Close"
+		case 0x0117:
+			return "non-listen-only connection not opened"
+		case 0x0119:
+			return "Forward_Close conn ID mismatch"
+		case 0x011A:
+			return "target application out of connections"
+		case 0x0203:
+			return "connection timeout"
+		case 0x0204:
+			return "Unconnected_Send timeout"
+		case 0x0205:
+			return "parameter error in Unconnected_Send"
+		case 0x0206:
+			return "message too large for Unconnected_Send"
+		case 0x0311:
+			return "port not available"
+		case 0x0312:
+			return "link address not available"
+		case 0x0315:
+			return "invalid segment type or value in path"
+		case 0x0316:
+			return "invalid attribute (connection path malformed)"
+		case 0x0317:
+			return "key segment not preceded by port segment"
+		case 0x0318:
+			return "link address to self invalid"
+		default:
+			return "connection failure"
+		}
+	case 0x02:
+		return "resource unavailable (most often: conn_params requesting oversized buffer — try conn_params=0)"
+	case 0x03:
+		return "invalid parameter value"
+	case 0x04:
+		return "path segment error (bad tag name or EPATH)"
+	case 0x05:
+		return "path destination unknown (slot empty, or object doesn't accept this service)"
+	case 0x06:
+		return "partial transfer"
+	case 0x07:
+		return "connection lost"
+	case 0x08:
+		return "service not supported by target object"
+	case 0x09:
+		return "invalid attribute value"
+	case 0x0A:
+		return "attribute list error"
+	case 0x0B:
+		return "already in requested state"
+	case 0x0C:
+		return "object state conflict"
+	case 0x0D:
+		return "object already exists"
+	case 0x0E:
+		return "attribute not settable (write to read-only)"
+	case 0x0F:
+		return "privilege violation"
+	case 0x10:
+		return "device state conflict"
+	case 0x11:
+		return "reply data too large"
+	case 0x12:
+		return "fragmentation of primitive value"
+	case 0x13:
+		return "not enough data"
+	case 0x14:
+		return "attribute not supported"
+	case 0x15:
+		return "too much data"
+	case 0x16:
+		return "object does not exist"
+	case 0x17:
+		return "service fragmentation sequence not in progress"
+	case 0x18:
+		return "no stored attribute data"
+	case 0x19:
+		return "store operation failure"
+	case 0x1A:
+		return "routing failure: request packet too large"
+	case 0x1B:
+		return "routing failure: response packet too large"
+	case 0x1C:
+		return "missing attribute list entry data"
+	case 0x1D:
+		return "invalid attribute value list"
+	case 0x1E:
+		return "embedded service error"
+	case 0x1F:
+		return "vendor-specific error"
+	case 0x20:
+		return "invalid parameter"
+	case 0x21:
+		return "write-once value or medium already written"
+	case 0x22:
+		return "invalid reply received"
+	case 0x25:
+		return "key failure in path"
+	case 0x26:
+		return "path size invalid"
+	case 0x27:
+		return "unexpected attribute in list"
+	case 0x28:
+		return "invalid member id"
+	case 0x29:
+		return "member not settable"
+	}
+	return "unknown CIP status"
 }
 
 // translateCallErr maps shm-layer errors to the public sentinels +
@@ -104,6 +265,10 @@ func ErrCode(err error) int {
 	var ee EngineError
 	if errors.As(err, &ee) {
 		return ee.Code
+	}
+	var ce *CIPError
+	if errors.As(err, &ce) {
+		return BPErrCIPStatus
 	}
 	switch {
 	case errors.Is(err, ErrSendRequest):
@@ -150,6 +315,8 @@ func Strerror(rc int) string {
 		return "parameter range error (check path string format: P:1,S:2 not 1,2)"
 	case BPErrSlotTooLarge:
 		return "response too large for slot (reduce batch size)"
+	case BPErrCIPStatus:
+		return "CIP-layer rejection (errors.As(err, &CIPError) for details)"
 	case BPErrClientOpen:
 		return "shm_open/ftruncate/mmap failed (is bpServer running? --ipc=host set?)"
 	case BPErrNoFreeSlot:

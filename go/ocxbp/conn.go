@@ -114,10 +114,11 @@ func (c *Client) TxRxOpen(spec *ConnSpec) (connID, connSerial uint16, err error)
 		if msg.RespLen >= 1 {
 			svc = resp[0]
 		}
+		ce := &CIPError{Service: svc, Status: status, ExtStatus: ext, Slot: slot}
 		fmt.Fprintf(os.Stderr,
-			"[TxRxOpen] LFO CIP failure: svc=0x%02x status=0x%02x ext=0x%04x slot=%d\n",
-			svc, status, ext, slot)
-		return 0, 0, ErrGeneric
+			"[TxRxOpen] LFO CIP failure: svc=0x%02x status=0x%02x ext=0x%04x slot=%d (%s)\n",
+			svc, status, ext, slot, CIPStatusString(status, ext))
+		return 0, 0, ce
 	}
 
 	c.txrxMu.Lock()
@@ -248,16 +249,21 @@ func (c *Client) TxRxClose(spec *ConnSpec) error {
 	if _, ok := cip.ParseForwardClose(resp[:msg.RespLen]); !ok {
 		svc := uint8(0)
 		st := uint8(0xFF)
+		ext := uint16(0)
 		if msg.RespLen >= 1 {
 			svc = resp[0]
 		}
 		if msg.RespLen >= 3 {
 			st = resp[2]
 		}
+		if msg.RespLen >= 6 && resp[3] != 0 {
+			ext = uint16(resp[4]) | (uint16(resp[5]) << 8)
+		}
+		ce := &CIPError{Service: svc, Status: st, ExtStatus: ext, Slot: slot}
 		fmt.Fprintf(os.Stderr,
-			"[TxRxClose] FC CIP failure: svc=0x%02x status=0x%02x slot=%d serial=0x%04x\n",
-			svc, st, slot, connSerial)
-		return ErrGeneric
+			"[TxRxClose] FC CIP failure: svc=0x%02x status=0x%02x ext=0x%04x slot=%d serial=0x%04x (%s)\n",
+			svc, st, ext, slot, connSerial, CIPStatusString(st, ext))
+		return ce
 	}
 	return nil
 }

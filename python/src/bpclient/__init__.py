@@ -11,6 +11,7 @@ SPDX-License-Identifier: MIT
 """
 
 from .errors import (
+    BpCipError,
     BpClientOpen,
     BpEngine,
     BpError,
@@ -23,6 +24,7 @@ from .errors import (
     BpRecvAnswer,
     BpSendRequest,
     BpSlotTooLarge,
+    cip_status_message,
     err_code,
     strerror,
 )
@@ -55,6 +57,8 @@ __all__ = [
     "BpClientOpen",
     "BpNoFreeSlot",
     "BpEngine",
+    "BpCipError",
+    "cip_status_message",
     "strerror",
     "err_code",
 ]

@@ -20,6 +20,7 @@ from . import _proto as P
 from ._ipc import Client as _RawClient
 from .conn import ConnSpec
 from .errors import (
+    BpCipError,
     BpEngine,
     BpGeneric,
     BpNotOpen,
@@ -27,6 +28,7 @@ from .errors import (
     BpNullArg,
     BpParamRange,
     BpSlotTooLarge,
+    cip_status_message,
     raise_for_rc,
 )
 from .identity import Identity
@@ -400,10 +402,10 @@ class Client:
             if len(msg.resp_data) >= 6 and msg.resp_data[3]:
                 ext = msg.resp_data[4] | (msg.resp_data[5] << 8)
             print(f"[txrx_open] LFO CIP failure: svc=0x{svc:02x} "
-                  f"status=0x{status:02x} ext=0x{ext:04x} slot={slot}",
+                  f"status=0x{status:02x} ext=0x{ext:04x} slot={slot} "
+                  f"({cip_status_message(status, ext)})",
                   file=sys.stderr)
-            raise BpGeneric(
-                f"Forward_Open rejected: svc=0x{svc:02x} status=0x{status:02x}")
+            raise BpCipError(service=svc, status=status, ext_status=ext, slot=slot)
 
         with self._txrx_mu:
             if spec.app_handle in self._txrx_conns:
@@ -491,11 +493,15 @@ class Client:
         status, ok = cw.parse_forward_close(msg.resp_data)
         if not ok:
             svc = msg.resp_data[0] if msg.resp_data else 0
+            ext = 0
+            if len(msg.resp_data) >= 6 and msg.resp_data[3]:
+                ext = msg.resp_data[4] | (msg.resp_data[5] << 8)
             print(f"[txrx_close] FC CIP failure: svc=0x{svc:02x} "
-                  f"status=0x{status:02x} slot={state.slot} "
-                  f"serial=0x{state.conn_serial:04x}", file=sys.stderr)
-            raise BpGeneric(
-                f"Forward_Close rejected: svc=0x{svc:02x} status=0x{status:02x}")
+                  f"status=0x{status:02x} ext=0x{ext:04x} slot={state.slot} "
+                  f"serial=0x{state.conn_serial:04x} "
+                  f"({cip_status_message(status, ext)})", file=sys.stderr)
+            raise BpCipError(service=svc, status=status,
+                             ext_status=ext, slot=state.slot)
 
 
 # Re-import to avoid a circular ref at module top.
