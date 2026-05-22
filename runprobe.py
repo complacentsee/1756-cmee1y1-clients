@@ -1,18 +1,23 @@
-"""Run a tool from the bpclient-c-tagtest:dev image on the HMI Docker daemon.
+"""Run a tool from a bpclient-<lang>-tagtest:dev image on the HMI Docker daemon.
 
 Usage:
+    py runprobe.py [--image IMG] <tool> [args...]
+
+Examples:
     py runprobe.py msgprobe --service 1 --path "01 02 20 01 24 01"
-    py runprobe.py connidentity --slot 2
+    py runprobe.py --image bpclient-go-tagtest:dev tagtest
+    py runprobe.py --image bpclient-python-tagtest:dev tagtest
+
+--image defaults to bpclient-c-tagtest:dev (the original C image). Each
+language's build_image.py tags its own image; pass --image to target it.
 
 Streams demuxed container logs to stdout, returns the container exit code.
-
-This file is throwaway — used during RE/empirical phases to exercise
-diagnostic tools without rebuilding the image. Not part of the shipped SDK.
+Throwaway runner for RE/validation phases — not part of the shipped SDK.
 """
-import json, sys, time, urllib.request
+import json, sys, urllib.request
 
 HOST = 'http://10.0.0.166:2375'
-IMAGE = 'bpclient-c-tagtest:dev'
+DEFAULT_IMAGE = 'bpclient-c-tagtest:dev'
 
 
 def docker(method, path, body=None, headers=None, parse_json=True):
@@ -43,9 +48,9 @@ def demux(buf):
     return ''.join(out)
 
 
-def run(tool, args):
+def run(image, tool, args):
     cfg = {
-        'Image': IMAGE,
+        'Image': image,
         'Entrypoint': [f'/usr/local/bin/{tool}'],
         'Cmd': list(args),
         'HostConfig': {
@@ -71,8 +76,27 @@ def run(tool, args):
             pass
 
 
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('Usage: runprobe.py <tool> [args...]', file=sys.stderr)
+def parse_argv(argv):
+    image = DEFAULT_IMAGE
+    i = 1
+    while i < len(argv) and argv[i].startswith('--'):
+        if argv[i] == '--image':
+            if i + 1 >= len(argv):
+                print('--image requires a value', file=sys.stderr)
+                sys.exit(2)
+            image = argv[i + 1]
+            i += 2
+        elif argv[i].startswith('--image='):
+            image = argv[i].split('=', 1)[1]
+            i += 1
+        else:
+            break
+    if i >= len(argv):
+        print('Usage: runprobe.py [--image IMG] <tool> [args...]', file=sys.stderr)
         sys.exit(2)
-    sys.exit(run(sys.argv[1], sys.argv[2:]))
+    return image, argv[i], argv[i + 1:]
+
+
+if __name__ == '__main__':
+    image, tool, args = parse_argv(sys.argv)
+    sys.exit(run(image, tool, args))
