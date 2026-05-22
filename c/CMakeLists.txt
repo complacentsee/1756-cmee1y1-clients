@@ -56,16 +56,8 @@ target_link_libraries(typetest PRIVATE bpclient pthread rt m)
 add_executable(findtags examples/findtags.c)
 target_link_libraries(findtags PRIVATE bpclient pthread rt)
 
-# Example: udtprobe — exercise raw-byte / struct-type / dot-notation
-# access patterns against a UDT instance and array-of-UDT
-add_executable(udtprobe examples/udtprobe.c)
-target_link_libraries(udtprobe PRIVATE bpclient pthread rt)
-
-add_executable(udtprobe2 examples/udtprobe2.c)
-target_link_libraries(udtprobe2 PRIVATE bpclient pthread rt)
-
-# Example: structprobe — RE the OCXcip_GetStructInfo + GetStructMbrInfo
-# response layouts by dumping raw bytes
+# Example: structprobe — raw-byte dump of OCXcip_GetStructInfo +
+# OCXcip_GetStructMbrInfo responses (diagnostic / RE tool)
 add_executable(structprobe examples/structprobe.c)
 target_link_libraries(structprobe PRIVATE bpclient pthread rt)
 

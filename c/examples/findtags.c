@@ -30,9 +30,10 @@ int main(int argc, char *argv[]) {
         bp_symbol_info_t info;
         if (bp_tagdb_symbol_at(db, i, &info) != BP_OK) continue;
         if (strncmp(info.name, prefix, plen) != 0) continue;
-        printf("  %-40s datatype=0x%04x struct=0x%04x  field1=0x%x  dim2=0x%x  dim3=0x%x  arr=%d  udt=%d  type_code=0x%04x\n",
+        printf("  %-40s datatype=0x%04x struct=0x%04x  esz=%u  dim0=%u  dim1=%u  rank=%d  arr=%d  udt=%d  type_code=0x%04x\n",
                info.name, info.data_type, info.struct_type,
-               info.field1, info.field2, info.field3,
+               info.elem_byte_size, info.dim0, info.dim1,
+               bp_symbol_rank(&info),
                bp_symbol_is_array(&info), bp_symbol_is_struct(&info),
                bp_symbol_type_code(&info));
     }

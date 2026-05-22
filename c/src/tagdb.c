@@ -144,12 +144,12 @@ static void sym_read(uint8_t *slot, void *user) {
 }
 
 int bp_symbol_is_array(const bp_symbol_info_t *info) {
-    /* The Logix symbol enumeration encodes array dim0 in field2.
-     * field2 > 0 means "this is an array with at least dim0 elements".
+    /* The Logix symbol enumeration encodes array dim0 in
+     * bp_symbol_info_t.dim0.  Non-zero means "this is an array".
      * (The data_type field does NOT have the 0x2000 array bit set on
-     * tested cm1756-via-1756-L85E enumerations; field2 is the only
-     * reliable signal.) */
-    return info ? (int)(info->field2 != 0) : 0;
+     * tested cm1756-via-L85E enumerations; dim0 is the only reliable
+     * signal.) */
+    return info ? (int)(info->dim0 != 0) : 0;
 }
 int bp_symbol_is_struct(const bp_symbol_info_t *info) {
     return info ? (int)(info->struct_type != 0) : 0;
@@ -304,9 +304,9 @@ int bp_tagdb_symbol_at(bp_tagdb_t *db, uint16_t index,
 
     out_info->data_type   = bp_ld_u16(ctx.raw + BP_SYM_DATATYPE_OFF);
     out_info->struct_type = bp_ld_u16(ctx.raw + BP_SYM_STRUCTTYPE_OFF);
-    out_info->field1      = bp_ld_u32(ctx.raw + BP_SYM_FIELD1_OFF);
-    out_info->field2      = bp_ld_u32(ctx.raw + BP_SYM_FIELD2_OFF);
-    out_info->field3      = bp_ld_u32(ctx.raw + BP_SYM_FIELD3_OFF);
+    out_info->elem_byte_size = bp_ld_u32(ctx.raw + BP_SYM_FIELD1_OFF);
+    out_info->dim0           = bp_ld_u32(ctx.raw + BP_SYM_FIELD2_OFF);
+    out_info->dim1           = bp_ld_u32(ctx.raw + BP_SYM_FIELD3_OFF);
     out_info->instance_id = bp_ld_u32(ctx.raw + BP_SYM_INSTID_OFF);
     out_info->flags       = bp_ld_u16(ctx.raw + BP_SYM_FLAGS_OFF);
     return BP_OK;

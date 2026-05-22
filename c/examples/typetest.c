@@ -203,6 +203,51 @@ static void test_bool_array(bp_tagdb_t *db, const char *tag, int count) {
     free(v0); free(probe); free(v1);
 }
 
+static void test_dint_2d(bp_tagdb_t *db, const char *tag, int dim0, int dim1) {
+    if (!tag || dim0 <= 0 || dim1 <= 0) return;
+    int total = dim0 * dim1;
+    printf("\n[dint 2-D] tag=%s dims=%d,%d (total=%d)\n", tag, dim0, dim1, total);
+    int32_t *v0 = calloc(total, sizeof(int32_t));
+    int32_t *probe = calloc(total, sizeof(int32_t));
+    int32_t *v1 = calloc(total, sizeof(int32_t));
+    if (!v0 || !probe || !v1) { free(v0); free(probe); free(v1); g_fail++; return; }
+
+    /* Build "tag[0,0]" for the batched read */
+    char zero_idx[256];
+    snprintf(zero_idx, sizeof(zero_idx), "%s[0,0]", tag);
+
+    MAYBE_ERR(bp_tagdb_read_dint_array(db, zero_idx, v0, (uint16_t)total), "initial read");
+    printf("  V0 (first 6 = first 2 rows): %d %d %d %d %d %d\n",
+           v0[0], v0[1], v0[2], v0[3], v0[4], v0[5]);
+
+    /* Probe: row r col c -> 1000*r + c */
+    for (int r = 0; r < dim0; r++)
+        for (int c = 0; c < dim1; c++)
+            probe[r * dim1 + c] = 1000 * r + c;
+    MAYBE_ERR(bp_tagdb_write_dint_array(db, zero_idx, probe, (uint16_t)total), "write");
+
+    MAYBE_ERR(bp_tagdb_read_dint_array(db, zero_idx, v1, (uint16_t)total), "post-write read");
+    int all_match = 1;
+    for (int i = 0; i < total; i++) if (v1[i] != probe[i]) all_match = 0;
+    if (all_match) { printf("    ok (batched readback row-major matches all %d)\n", total); g_pass++; }
+    else           { printf("    FAIL: batched readback mismatch\n"); g_fail++; }
+
+    /* Element-by-index spot check: [dim0/2, dim1/2] */
+    int mr = dim0 / 2, mc = dim1 / 2;
+    char idx[256];
+    snprintf(idx, sizeof(idx), "%s[%d,%d]", tag, mr, mc);
+    int32_t spot;
+    MAYBE_ERR(bp_tagdb_read_dint(db, idx, &spot), "indexed read");
+    int32_t expect = 1000 * mr + mc;
+    printf("  %s = %d (expect %d) %s\n", idx, spot, expect,
+           spot == expect ? "ok" : "FAIL");
+    if (spot == expect) g_pass++; else g_fail++;
+
+    /* Restore */
+    bp_tagdb_write_dint_array(db, zero_idx, v0, (uint16_t)total);
+    free(v0); free(probe); free(v1);
+}
+
 static void test_dint_array(bp_tagdb_t *db, const char *tag, int count) {
     if (!tag || count <= 0) return;
     printf("\n[dint array] tag=%s count=%d\n", tag, count);
@@ -244,6 +289,8 @@ int main(int argc, char *argv[]) {
     int array_count = 0;
     const char *bool_arr_tag = NULL;
     int bool_arr_count = 0;
+    const char *dint_2d_tag = NULL;
+    int dint_2d_dim0 = 0, dint_2d_dim1 = 0;
 
     static struct option opts[] = {
         {"path",   required_argument, 0, 'p'},
@@ -263,15 +310,21 @@ int main(int argc, char *argv[]) {
         {"array-count", required_argument, 0, 'n'},
         {"bool-array",        required_argument, 0, 'A'},
         {"bool-array-count",  required_argument, 0, 'N'},
+        {"dint-2d",      required_argument, 0, 'X'},
+        {"dint-2d-dim0", required_argument, 0, 'Y'},
+        {"dint-2d-dim1", required_argument, 0, 'Z'},
         {0,0,0,0}
     };
     int c, idx;
-    while ((c = getopt_long(argc, argv, "p:a:n:A:N:", opts, &idx)) != -1) {
+    while ((c = getopt_long(argc, argv, "p:a:n:A:N:X:Y:Z:", opts, &idx)) != -1) {
         if (c == 'p') path = optarg;
         else if (c == 'a') array_tag = optarg;
         else if (c == 'n') array_count = atoi(optarg);
         else if (c == 'A') bool_arr_tag = optarg;
         else if (c == 'N') bool_arr_count = atoi(optarg);
+        else if (c == 'X') dint_2d_tag = optarg;
+        else if (c == 'Y') dint_2d_dim0 = atoi(optarg);
+        else if (c == 'Z') dint_2d_dim1 = atoi(optarg);
         else if (c >= 1000) tags[c - 1000] = optarg;
     }
 
@@ -300,6 +353,7 @@ int main(int argc, char *argv[]) {
     test_string(db, tags[TAG_STRING]);
     test_dint_array(db, array_tag, array_count);
     test_bool_array(db, bool_arr_tag, bool_arr_count);
+    test_dint_2d(db, dint_2d_tag, dint_2d_dim0, dint_2d_dim1);
 
     bp_tagdb_close(db); bp_client_close(cl);
 

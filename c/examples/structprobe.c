@@ -4,8 +4,9 @@
  *                 response bytes to figure out the layout.
  *
  * Usage:
- *   structprobe --path P:1,S:2 --struct-id 0x23
- *   structprobe --path P:1,S:2 --struct-id 0x23 --member 0
+ *   structprobe --path P:1,S:2 --struct-id 0x21              # AB STRING UDT
+ *   structprobe --path P:1,S:2 --struct-id 0x21 --member 0
+ *   structprobe --path P:1,S:2 --struct-id 0x21 --all        # all members
  *
  * SPDX-License-Identifier: MIT
  */

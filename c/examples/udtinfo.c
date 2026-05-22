@@ -2,7 +2,8 @@
  * udtinfo.c — dump a UDT's full schema using the proper API.
  *
  * Usage:
- *   udtinfo --path P:1,S:2 --tag Tran_To_iSeries_FIFO_Loader
+ *   udtinfo --path P:1,S:2 --tag MyUDTTag
+ *   udtinfo --path P:1,S:2 --struct-id 0x21      # AB STRING UDT
  *
  * Looks up the tag's struct_id from symbol enumeration, then walks
  * every member with bp_tagdb_get_struct_member().  For nested UDT
@@ -63,19 +64,32 @@ static void dump_struct(bp_tagdb_t *db, uint16_t struct_id, int depth) {
 
 int main(int argc, char *argv[]) {
     const char *path = "P:1,S:2";
-    const char *tag = "Tran_To_iSeries_FIFO_Loader";
+    const char *tag = NULL;
     int struct_id = -1;
     static struct option opts[] = {
         {"path",      required_argument, 0, 'p'},
         {"tag",       required_argument, 0, 't'},
         {"struct-id", required_argument, 0, 's'},
+        {"help",      no_argument,       0, 'h'},
         {0,0,0,0}
     };
     int c, idx;
-    while ((c = getopt_long(argc, argv, "p:t:s:", opts, &idx)) != -1) {
-        if (c == 'p') path = optarg;
-        else if (c == 't') tag = optarg;
+    while ((c = getopt_long(argc, argv, "p:t:s:h", opts, &idx)) != -1) {
+        if      (c == 'p') path = optarg;
+        else if (c == 't') tag  = optarg;
         else if (c == 's') struct_id = (int)strtol(optarg, NULL, 0);
+        else if (c == 'h') {
+            printf("usage: %s --path PATH [--tag TAGNAME | --struct-id N]\n"
+                   "  --path PATH    OldI CIP route, default P:1,S:2\n"
+                   "  --tag NAME     enumerate the UDT used by this tag\n"
+                   "  --struct-id N  enumerate the UDT template with this id\n"
+                   "Either --tag or --struct-id is required.\n", argv[0]);
+            return 0;
+        }
+    }
+    if (!tag && struct_id < 0) {
+        fprintf(stderr, "error: --tag or --struct-id required (try --help)\n");
+        return 2;
     }
 
     bp_client_t *cl;
@@ -87,7 +101,7 @@ int main(int argc, char *argv[]) {
     printf("[udtinfo] path=%s symbols=%u\n\n", path, n);
 
     /* If --struct-id wasn't given, look up the tag and use its struct_type */
-    if (struct_id < 0) {
+    if (struct_id < 0 && tag) {
         int found = 0;
         for (uint16_t i = 0; i < n; i++) {
             bp_symbol_info_t info;

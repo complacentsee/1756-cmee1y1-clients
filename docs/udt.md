@@ -5,13 +5,13 @@ in CIP terminology). Three independent access patterns work today:
 
 | Approach | Suitable for | API |
 |----------|--------------|-----|
-| **Schema discovery + dotted member access** | UDTs whose layout you don't know at compile-time | `bp_tagdb_get_struct_info` + `bp_tagdb_get_struct_member` then `bp_tagdb_read_*` with `parent.member` tag names |
+| **Schema discovery + dotted member access** (recommended) | UDTs whose layout you don't know at compile-time | `bp_tagdb_get_struct_info` + `bp_tagdb_get_struct_member` then `bp_tagdb_read_*` with `parent.member` tag names |
 | **Direct dotted member access** | UDTs whose layout you DO know | `bp_tagdb_read_dint(db, "MyTag.Field", ...)` etc. |
-| **Whole-struct raw bytes** | When you know the byte layout and want to skip per-member round-trips | `bp_tagdb_access` with `data_type = struct's wire-level data_type` (e.g. `0x4527`), `elem_byte_size = struct_size`, `elem_count = 1`. Note: this requires the engine + PLC to agree on the struct template handle — works for some PLC firmwares, returns CIP error on others. The schema-discovery path is the portable choice. |
+| **Whole-struct raw bytes** | Rare cases; see "Gotcha" below | `bp_tagdb_access` with `data_type = struct's wire-level data_type`, `elem_byte_size = struct_size`, `elem_count = 1` |
 
 ## The schema-discovery flow
 
-Symbol enumeration already tells you whether a tag is a UDT
+Symbol enumeration tells you whether a tag is a UDT
 (`bp_symbol_is_struct(info)` → 1) and which template it uses
 (`info.struct_type`). To get the template's layout, call
 `bp_tagdb_get_struct_info` followed by `bp_tagdb_get_struct_member`
@@ -31,65 +31,49 @@ if (bp_symbol_is_struct(&sym)) {
         printf("  %s @ +%u  size=%u  flags=0x%02x\n",
                m.name, m.offset, m.byte_size, m.flags);
         if (bp_member_is_struct(&m)) {
-            /* recurse with m.struct_id */
+            /* recurse with m.struct_id to enumerate nested UDT members */
         }
     }
 }
 ```
 
-Then to actually read a member's value, build the dotted tag name
-and call the matching atomic-type helper:
+Then to read a member's value, build the dotted tag name and call
+the matching atomic-type helper:
 
 ```c
-int32_t fcode;
-bp_tagdb_read_dint(db, "MyUDT.FCODE", &fcode);
+int32_t v;
+bp_tagdb_read_dint(db, "MyUDT.SomeIntField", &v);
 
-char label[100]; size_t label_len;
-bp_tagdb_read_string(db, "MyUDT.FLABEL_ID", label, sizeof(label), &label_len);
+char buf[100]; size_t len;
+bp_tagdb_read_string(db, "MyUDT.SomeStringField", buf, sizeof(buf), &len);
 
 /* Element of an array of UDTs: */
-int32_t f;
-bp_tagdb_read_dint(db, "MyUDT_Array[5].FCODE", &f);
+bp_tagdb_read_dint(db, "MyUDT_Array[5].SomeIntField", &v);
 ```
 
 Writing UDT members works identically — `bp_tagdb_write_dint`,
 `bp_tagdb_write_string`, etc. with the dotted tag name. All atomic
 helpers accept dotted paths transparently.
 
-## Worked example: walking `Tran_To_iSeries_FIFO_Loader`
+## Worked example: the AB STRING UDT
 
-Captured from `examples/udtinfo` running against a real L85E
-firmware ~36.11:
+The Logix STRING type is itself a UDT (template id `0x21` on most
+firmwares), so it's a universally-available example. Running
+`udtinfo --struct-id 0x21` produces:
 
 ```
-struct 'Tran_FROM_Oldi_to_iSeries'  id=0x23  data_type=0x4527  size=104 bytes  members=5
-  [0] FCODE      @+0    type=DINT     size=4              flags=0x45
-  [1] FLABEL_ID  @+16   type=STRUCT   size=88  struct_id=0x21  flags=0x41
-    struct 'STRING'  id=0x21  data_type=0x0fce  size=88 bytes  members=2
-      [0] DATA   @+4    type=SINT     size=1[82]              flags=0x49
-      [1] LEN    @+0    type=DINT     size=4                  flags=0x45
-  [2] FSEQ       @+12   type=DINT     size=4                  flags=0x45
-  [3] FSTAT      @+4    type=DINT     size=4                  flags=0x45
-  [4] FSTATION   @+8    type=DINT     size=4                  flags=0x45
+struct 'STRING'  id=0x21  data_type=0x0fce  size=88 bytes  members=2
+  [0] DATA   @+4   type=SINT     size=1[82]            flags=0x49
+  [1] LEN    @+0   type=DINT     size=4                flags=0x45
 ```
 
-(Member indices are PLC-defined ordering — not necessarily the
-order members appear in Studio 5000's editor.)
+So a `STRING` is 88 bytes total: 4 bytes for `LEN` (DINT) + 82
+bytes for `DATA` (SINT[82]) + 2 bytes of trailing padding. The
+flag byte `0x49` on `DATA` indicates "atomic array".
 
-So `Tran_To_iSeries_FIFO_Loader` has five reachable accessors:
-
-```c
-bp_tagdb_read_dint  (db, "Tran_To_iSeries_FIFO_Loader.FCODE",     &v);
-bp_tagdb_read_dint  (db, "Tran_To_iSeries_FIFO_Loader.FSTAT",     &v);
-bp_tagdb_read_dint  (db, "Tran_To_iSeries_FIFO_Loader.FSTATION",  &v);
-bp_tagdb_read_dint  (db, "Tran_To_iSeries_FIFO_Loader.FSEQ",      &v);
-bp_tagdb_read_string(db, "Tran_To_iSeries_FIFO_Loader.FLABEL_ID",
-                      buf, sizeof(buf), &len);
-```
-
-Verified live against the lab L85E: all four DINT members
-round-trip clean; the STRING member round-trips clean
-('INSDRV-1779328111-44' → 'BPCLIENT_UDT_TEST' → restored).
+The same flow works for custom UDTs you define in Studio 5000.
+Pass the tag name to `udtinfo --tag MyTag` and it'll look up the
+struct_id from the symbol enumeration and walk the template.
 
 ## Flag byte interpretation
 
@@ -99,14 +83,12 @@ encodes:
 | Value | Meaning | Examples |
 |-------|---------|----------|
 | `0x45` | atomic scalar | DINT, REAL, BOOL, INT members |
-| `0x41` | struct member | Nested UDT (look at `struct_id`) |
+| `0x41` | struct member | nested UDT (look at `struct_id`) |
 | `0x49` | atomic array | `SINT[82]` member of `STRING` |
 
-Bit 3 (`0x08`) is set when the member is an array. Use
-`bp_member_is_array(&m)` as a convenience.
-
-The high nibble's `0x40` bit is set in all observed cases — possibly
-the "this is a valid member" indicator.
+Bit `0x08` is set when the member is an array. Use
+`bp_member_is_array(&m)` as a convenience. Bit `0x40` is set in all
+observed cases — likely the "valid member" indicator.
 
 ## Nested UDTs
 
@@ -119,8 +101,59 @@ bp_tagdb_get_struct_info(db, m.struct_id, &nested);
 /* enumerate nested.n_members the same way */
 ```
 
-The recursion is what lets `udtinfo` print the `STRING` UDT
-inline under the `FLABEL_ID` member above.
+Logix UDTs can nest arbitrarily deep. The `examples/udtinfo.c`
+program recurses up to depth 2 for readability; raise the depth
+limit if you have deeper hierarchies.
+
+## Multi-dimensional arrays
+
+Logix supports 1-D, 2-D, and 3-D array tags. Tag-level arrays
+expose their shape via `bp_symbol_info_t`:
+
+```c
+bp_symbol_info_t info;
+bp_tagdb_symbol_at(db, idx, &info);
+/* For DINT[5,3]:        info.dim0 = 5, info.dim1 = 3, rank = 2 */
+/* For DINT[10]:         info.dim0 = 10, info.dim1 = 0, rank = 1 */
+/* For scalar DINT:      info.dim0 = 0,  info.dim1 = 0, rank = 0 */
+
+int  r = bp_symbol_rank(&info);              /* 0/1/2/3 */
+uint32_t n = bp_symbol_total_elements(&info); /* dim0 * dim1 (or 1) */
+```
+
+**Element addressing uses comma-separated indices** in the tag
+name string — Logix native convention:
+
+```c
+int32_t v;
+bp_tagdb_read_dint (db, "MyDintArr2D[2,1]", &v);              /* 2-D single element */
+bp_tagdb_write_dint(db, "MyDintArr2D[4,2]", 42);
+
+/* Read a row slice (1-D access starting at [2,0]): */
+int32_t row[3];
+bp_tagdb_read_dint_array(db, "MyDintArr2D[2,0]", row, 3);
+```
+
+The batched array helpers (`bp_tagdb_read_dint_array` etc.) work
+with multi-dim tags because the PLC returns elements in **row-major
+linear order** — `[i,j]` is at linear index `i * dim1 + j`. So
+reading the entire `DINT[5,3]` is one call:
+
+```c
+int32_t all[15];
+bp_tagdb_read_dint_array(db, "MyDintArr2D[0,0]", all, 15);
+/* all[i*3 + j] is element [i,j] */
+```
+
+**3-D array introspection is not yet characterised.** The symbol-info
+struct exposes only `dim0` and `dim1`. If you have a 3-D Logix array
+tag, please contribute a sample for layout RE.
+
+**Multi-dim arrays as UDT members** likewise aren't fully
+introspected — `bp_struct_member_info_t.array_count` holds the
+first array dim, and the bytes at member-info `+0x3C` are zero in
+all currently-observed cases. If you have a UDT with a `DINT[N,M]`
+member, again — sample appreciated.
 
 ## Whole-struct reads (the gotcha)
 
@@ -139,30 +172,17 @@ bp_tag_request_t r = {
 bp_tagdb_access(db, &r, 1);
 ```
 
-In practice, this **returns a CIP General Status error**
-(`r.result = 0x09`) on the firmware we tested against. The engine
+In practice this **returns a CIP General Status error**
+(`r.result = 0x09`) on the firmwares we tested against. The engine
 sends the request to the PLC; the PLC requires a per-type
 template-handle / CRC match that our request doesn't supply
 correctly.
 
 **Recommendation: stick with the schema-discovery + dotted access
-flow.** It's portable across firmware variants and gives you
-free type-awareness. Per-member round-trips do cost more for
-heavily-nested UDTs, so batch when possible using
-`bp_tagdb_access` with multiple `bp_tag_request_t` entries.
-
-## What we don't (yet) support
-
-- **Multi-dimensional arrays within UDT members** — the SDK
-  surfaces only the first array dim (`array_count`). The bytes at
-  member-info offset `+0x3C` are zero in every tested case; they
-  might encode a second dim or might be reserved.
-- **UDT struct template enumeration without a tag** — you need a
-  symbol's `struct_type` to start; we don't expose a way to walk
-  ALL struct templates the PLC defines. (Workaround: enumerate
-  all tags and collect unique `struct_type` values.)
-- **Schema-aware whole-struct read** — see the gotcha above. The
-  per-member path is the supported one.
+flow.** It's portable across firmware variants and gives you free
+type-awareness. Per-member round-trips do cost more for heavily-
+nested UDTs, so batch when possible using `bp_tagdb_access` with
+multiple `bp_tag_request_t` entries.
 
 ## Worked example program
 
@@ -171,6 +191,17 @@ against any UDT-typed tag to dump its schema (and nested UDTs up
 to two levels deep):
 
 ```sh
-udtinfo --path P:1,S:2 --tag Tran_To_iSeries_FIFO_Loader
-udtinfo --path P:1,S:2 --struct-id 0x23
+udtinfo --path P:1,S:2 --tag MyCustomUDTTag
+udtinfo --path P:1,S:2 --struct-id 0x21    # the AB STRING UDT
 ```
+
+## What's not (yet) supported
+
+- **3-D array tags** — symbol-info exposes only `dim0`/`dim1`
+- **Multi-dim arrays as UDT members** — `array_count` is the first
+  dim only
+- **Whole-struct one-shot read** — see "Gotcha" above
+- **UDT struct-template enumeration without a tag** — you need a
+  symbol's `struct_type` to start; we don't expose a way to walk
+  ALL struct templates the PLC defines. Workaround: enumerate all
+  tags and collect unique `struct_type` values.
