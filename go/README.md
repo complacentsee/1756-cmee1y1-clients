@@ -85,6 +85,8 @@ runtime (carries glibc + dynamic loader for the cgo POSIX-sem wrapper).
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
 | `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
+| `symcache`     | v0.9.0 symbol-cache validator (cold / warm / preload timing) |
+| `multitagtest` | v0.9.0 read_tags + write_tags mixed-type batch round-trip |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
@@ -105,7 +107,9 @@ go/
 │   ├── module.go              switch / LED / display
 │   ├── message.go             MessageSend (UCMM)
 │   ├── conn.go                TxRxOpen/Msg/Close (v0.7.0+ LFO via MessageSend)
-│   ├── pool.go                PoolOpen/TxRx/Batch/Close (v0.8.0+)
+│   ├── pool.go                PoolOpen/TxRx/Batch/Close + auto-reopen (v0.8.0+/v0.9.0+)
+│   ├── tagcache.go            LookupSymbol / PreloadSymbols (v0.9.0+)
+│   ├── multitag.go            ReadTags / WriteTags (v0.9.0+)
 │   ├── errors.go              BPErr* constants + sentinels + CIPError (v0.8.0+)
 │   ├── shm/                   IPC layer (cgo for POSIX sems)
 │   │   ├── consts.go
@@ -132,14 +136,21 @@ its own slot across all 16 slots, gated by the cross-process
 
 ## Status
 
-v0.8.0.  Outbound tag I/O fully functional including arrays + BOOL[]
-+ STRING (v0.6.0), class-3 connected messaging (v0.7.0), and the
-v0.8.0 quality-of-life additions:
+v0.9.0.  Outbound tag I/O fully functional including v0.9.0's
+application-layer ergonomic surface on top of the v0.8.0 transport
+primitives:
 
-- Structured CIP-layer errors (`*CIPError` via `errors.As`).
-- `PoolOpen` / `PoolTxRx` / `PoolBatch` / `PoolClose` — per-slot
-  pool with keepalive goroutine.
-- `cip.BuildUnconnectedSend` for multi-hop routes via svc 0x52.
+- `LookupSymbol(name)` / `PreloadSymbols()` — per-client symbol
+  cache amortizes the per-symbol IPC.
+- `ReadTags(names)` / `WriteTags(map)` — mixed-type scalar batch
+  read/write in a single AccessTagData round-trip.  `WriteTags`
+  rejects type mismatches pre-IPC.
+- Pool auto-reopen on dead entries — long-running scan loops
+  survive transient PLC hiccups; backoff 1 s → 2 s → ... cap 30 s.
+
+(v0.8.0 added structured CIP-layer errors, the per-slot connection
+pool with keepalive, `PoolBatch`, and multi-hop routes via
+Unconnected_Send.)
 
 Inherited limitation: small-buffer transport (~500 B envelope
 inherited from `MessageSend`).  The 4002-byte chip-mailbox-0x204

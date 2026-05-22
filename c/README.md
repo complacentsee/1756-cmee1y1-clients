@@ -19,12 +19,13 @@ cmake --build build --parallel
 ```
 
 Produces:
-- `build/libbpclient.so.0.8.0` — shared library
+- `build/libbpclient.so.0.9.0` — shared library
 - `build/libbpclient.a` — static library
 - `build/tagtest` — the canonical smoke test executable
   (plus the other diagnostic binaries listed in
   [`CMakeLists.txt`](CMakeLists.txt): `msgprobe`, `identity`,
-  `connidentity`, `conntest`, `pooltest`, `routedident`, `pathprobe`, `actnodes`, `modutil`, etc.)
+  `connidentity`, `conntest`, `pooltest`, `routedident`, `symcache`,
+  `multitagtest`, `pathprobe`, `actnodes`, `modutil`, etc.)
 
 System install:
 
@@ -116,8 +117,10 @@ c/
 │   ├── access.c              AccessTagData + scalar R/W helpers
 │   ├── message.c             OCXcip_MessageSend (UCMM CIP)
 │   ├── conn.c                bp_client_txrx_* (LFO + MessageSend, v0.7.0+)
-│   ├── pool.c                bp_client_pool_* (pool + keepalive + batch, v0.8.0+)
+│   ├── pool.c                bp_client_pool_* (pool + keepalive + batch + auto-reopen, v0.8.0+/v0.9.0+)
 │   ├── route.c               bp_build_unconnected_send (multi-hop, v0.8.0+)
+│   ├── tagcache.c            bp_tagdb_lookup_symbol / preload_symbols (v0.9.0+)
+│   ├── multitag.c            bp_tagdb_read_tags / write_tags (v0.9.0+)
 │   ├── identity.c            OCXcip_GetIdObject / GetDeviceIdObject
 │   ├── module.c              modutil helpers (switch / display / LED)
 │   ├── errors.c              bp_strerror() + bp_cip_status_string() (v0.8.0+)

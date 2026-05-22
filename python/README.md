@@ -62,6 +62,8 @@ py runprobe.py --image bpclient-python-tagtest:dev tagtest
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
 | `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
+| `symcache`     | v0.9.0 symbol-cache validator (cold / warm / preload timing) |
+| `multitagtest` | v0.9.0 read_tags + write_tags mixed-type batch round-trip |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
@@ -87,16 +89,22 @@ BP_PLC_PATH=P:1,S:2 pytest tests/                      # + end-to-end
 
 ## Status
 
-v0.8.0.  Outbound tag I/O fully functional including arrays + BOOL[]
-+ STRING (v0.6.0), class-3 connected messaging (v0.7.0), and the
-v0.8.0 quality-of-life additions:
+v0.9.0.  Outbound tag I/O fully functional including v0.9.0's
+application-layer ergonomic surface on top of the v0.8.0 transport
+primitives:
 
-- Structured CIP-layer errors (`BpCipError` with `.service /
-  .status / .ext_status / .slot`).
-- `pool_open` / `pool_txrx` / `pool_batch` / `pool_close` — per-slot
-  pool with idle keepalive thread.
-- `bpclient.build_unconnected_send` + `bpclient.port_segment` for
-  multi-hop routes via svc 0x52.
+- `db.lookup_symbol(name)` / `db.preload_symbols()` — per-client
+  symbol cache amortizes the per-symbol IPC.
+- `db.read_tags(names)` / `db.write_tags({name: value})` —
+  mixed-type scalar batch read/write in one AccessTagData round-trip.
+  `write_tags` validates value types against the symbol's data_type
+  pre-IPC (bool checked BEFORE int, since Python's bool inherits
+  from int).
+- Pool auto-reopen on dead entries — long-running scan loops
+  survive transient PLC hiccups; backoff 1 s → 2 s → ... cap 30 s.
+
+(v0.8.0 added `BpCipError`, the per-slot connection pool with
+keepalive, `pool_batch`, and multi-hop routes via Unconnected_Send.)
 
 Inherited limitation: small-buffer transport (~500 B envelope
 inherited from `message_send`).  The 4002-byte chip-mailbox-0x204

@@ -16,16 +16,18 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.8.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.8.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.8.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.9.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.9.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.9.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
 the `typetest` cross-type sweep (scalars × 11 + STRING + DINT[1-D]
 + BOOL[] + DINT[2-D] + DINT[3-D]), the v0.7.0 `conntest` class-3
 round-trip, the v0.8.0 `pooltest` (M-worker fanout + `--batch`),
-and the v0.8.0 `routedident` (Unconnected_Send routing) — all
+the v0.8.0 `routedident` (Unconnected_Send routing), the v0.9.0
+`symcache` (lookup cold/warm/preload), and the v0.9.0 `multitagtest`
+(read_tags + write_tags round-trip with type validation) — all
 **byte-identically** modulo timings.  See [`runprobe.py`](runprobe.py)
 for the shared cross-language runner.
 
@@ -38,22 +40,35 @@ missing from the cm1756 image.  Wire format in
 [`docs/protocol.md`](docs/protocol.md) "Connected messaging —
 wire format".
 
-**v0.8.0 (current)** adds:
+**v0.9.0 (current)** adds an application-layer ergonomic surface on
+top of v0.8.0's transport primitives:
 
-- Structured CIP-layer errors — `BP_ERR_CIP_STATUS` /
-  `*ocxbp.CIPError` / `bpclient.BpCipError` carrying
-  `(service, status, ext_status, slot)` instead of collapsing
-  to `BP_ERR_GENERIC`.  See [`docs/error-codes.md`](docs/error-codes.md).
-- Per-slot **connection pool** with idle keepalive — `pool_open` /
-  `pool_txrx` / `pool_close` mirror sibling apex2d's
-  `slot_pool_keepalive_idle`.
-- **`pool_batch`** — single-call fan-out across the pool with
-  `min(pool.size, N)` worker threads.
-- **Multi-hop routes via Unconnected_Send (0x52)** — helpers
-  (`bp_build_unconnected_send` / `cip.BuildUnconnectedSend` /
-  `bpclient.build_unconnected_send`) assemble the routed
-  envelope.  See
-  [`docs/protocol.md#multi-hop-routes--unconnected_send-service-0x52`](docs/protocol.md).
+- **Per-client symbol cache** — `lookup_symbol(name)` / `preload_symbols()`
+  on a TagDB amortize the per-symbol IPC across the first scan-loop
+  iteration; subsequent lookups are 15-15000× faster (microseconds
+  instead of milliseconds).
+- **`read_tags(names)`** — one-call mixed-type scalar batch read.
+  Resolves each name via the cache and packs into a single
+  AccessTagData round-trip (~25-30× faster than sequential
+  `read_dint` / `read_real`).
+- **`write_tags({name: value})`** with **pre-IPC type validation** —
+  type mismatches return `BP_ERR_PARAM_RANGE` before the wire,
+  catching misuse at the SDK boundary instead of as a CIP-layer
+  rejection round-trip.
+- **Pool auto-reopen** — keepalive thread auto-recovers dead pool
+  entries with exponential backoff (1 s → 2 s → 4 s → ... cap 30 s),
+  so long-running scan loops survive transient PLC hiccups without
+  losing pool capacity.
+
+**v0.8.0** added structured CIP-layer errors
+(`BP_ERR_CIP_STATUS` / `*ocxbp.CIPError` / `bpclient.BpCipError`),
+the **per-slot connection pool** with idle keepalive
+(`pool_open` / `pool_txrx` / `pool_close`), **`pool_batch`** for
+single-call concurrent dispatch, and **multi-hop routes** via
+Unconnected_Send (`bp_build_unconnected_send` /
+`cip.BuildUnconnectedSend` / `bpclient.build_unconnected_send`).
+See [`docs/error-codes.md`](docs/error-codes.md) +
+[`docs/protocol.md#multi-hop-routes--unconnected_send-service-0x52`](docs/protocol.md).
 
 Inherited limitation (unchanged in v0.8.0): small-buffer transport
 only (~500 B envelope, same as `MessageSend`).  The 4002-byte
@@ -107,6 +122,47 @@ All three speak the same wire protocol with the same semantics and
 the same container plumbing. Use [`runprobe.py`](runprobe.py) to
 diff the output of `tagtest` / `typetest` / `msgprobe` / `conntest`
 across languages and confirm byte equivalence.
+
+### Mixed-type batch read/write (v0.9.0)
+
+For scan loops touching many tags of mixed types, the v0.9.0 helpers
+collapse N sequential `read_dint` / `read_bool` calls into a single
+AccessTagData round-trip.  Pre-IPC type validation on writes catches
+misuse at the SDK boundary:
+
+```c
+// C
+bp_value_t values[3];
+const char *names[3] = { "OCX_TEST", "Alarm", "DaylightSavings" };
+bp_tagdb_read_tags(db, names, 3, values);
+// values[i].kind / values[i].v.{dint,boolean,real,...} populated;
+// values[i].cip_status carries per-tag status.
+
+bp_value_t writes[1] = { { .kind = BP_VAL_DINT, .v.dint = 42 } };
+bp_tagdb_write_tags(db, (const char *[]){"OCX_TEST"}, writes, 1);
+```
+
+```go
+// Go
+results, _ := db.ReadTags([]string{"OCX_TEST", "Alarm", "DaylightSavings"})
+// results["OCX_TEST"].Value is int32, .CIPStatus is uint32.
+
+db.WriteTags(map[string]interface{}{"OCX_TEST": int32(42)})
+```
+
+```python
+# Python
+values = db.read_tags(["OCX_TEST", "Alarm", "DaylightSavings"])
+# values == {"OCX_TEST": 42, "Alarm": 0, "DaylightSavings": False}
+
+db.write_tags({"OCX_TEST": 42})
+```
+
+First call after `build()` pays the symbol-resolution cost (one IPC
+round-trip per name, amortized into the cache); subsequent calls are
+a single AccessTagData round-trip.  See
+[`docs/error-codes.md`](docs/error-codes.md) for the type-validation
+error semantics.
 
 ### Class-3 connected messaging (v0.7.0)
 
@@ -322,6 +378,8 @@ Override the default `tagtest` entrypoint via Docker's
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
 | `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
+| `symcache`     | v0.9.0 symbol-cache validator (lookup cold / warm / preload timing) |
+| `multitagtest` | v0.9.0 read_tags + write_tags mixed-type batch round-trip with type validation |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
