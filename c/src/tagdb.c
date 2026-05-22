@@ -143,6 +143,16 @@ static void sym_read(uint8_t *slot, void *user) {
     memcpy(ctx->raw, slot + BP_HDR_PAYLOAD_START + 8, 128);
 }
 
+int bp_symbol_is_array(const bp_symbol_info_t *info) {
+    return info ? (int)((info->data_type & 0x2000u) != 0) : 0;
+}
+int bp_symbol_is_struct(const bp_symbol_info_t *info) {
+    return info ? (int)(info->struct_type != 0) : 0;
+}
+uint16_t bp_symbol_type_code(const bp_symbol_info_t *info) {
+    return info ? (uint16_t)(info->data_type & 0x1FFFu) : 0;
+}
+
 int bp_tagdb_symbol_at(bp_tagdb_t *db, uint16_t index,
                        bp_symbol_info_t *out_info) {
     if (!db || !out_info) return BP_ERR_NULL_ARG;

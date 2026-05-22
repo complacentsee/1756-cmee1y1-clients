@@ -36,9 +36,21 @@ add_library(bpclient_static STATIC ${LIB_SOURCES})
 set_target_properties(bpclient_static PROPERTIES OUTPUT_NAME bpclient)
 target_link_libraries(bpclient_static PRIVATE pthread rt)
 
-# Example: tagtest
+# Example: tagtest — canonical smoke test (read/write OCX_TEST)
 add_executable(tagtest examples/tagtest.c)
 target_link_libraries(tagtest PRIVATE bpclient pthread rt)
+
+# Example: discover — enumerate symbols on a PLC, group by type
+add_executable(discover examples/discover.c)
+target_link_libraries(discover PRIVATE bpclient pthread rt)
+
+# Example: dumpsym — full symbol-info dump for diagnostic purposes
+add_executable(dumpsym examples/dumpsym.c)
+target_link_libraries(dumpsym PRIVATE bpclient pthread rt)
+
+# Example: typetest — comprehensive type+array+string round-trip tests
+add_executable(typetest examples/typetest.c)
+target_link_libraries(typetest PRIVATE bpclient pthread rt m)
 
 # Install
 include(GNUInstallDirs)

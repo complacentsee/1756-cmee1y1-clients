@@ -134,6 +134,11 @@ typedef struct {
 int  bp_tagdb_symbol_at(bp_tagdb_t *db, uint16_t index,
                         bp_symbol_info_t *out_info);
 
+/* Symbol-info accessors — convenience wrappers around the bit math. */
+int      bp_symbol_is_array (const bp_symbol_info_t *info);  /* 1 = array,  0 = scalar */
+int      bp_symbol_is_struct(const bp_symbol_info_t *info);  /* 1 = UDT,   0 = atomic */
+uint16_t bp_symbol_type_code(const bp_symbol_info_t *info);  /* data_type & 0x1FFF */
+
 /* ============================================================
  * Tag access (read/write)
  * ============================================================ */
@@ -173,23 +178,121 @@ int  bp_tagdb_access(bp_tagdb_t *db,
  * Each one does one round-trip.  For batched access, use
  * bp_tagdb_access() with multiple requests in a single call.
  * ============================================================ */
-int  bp_tagdb_read_dint (bp_tagdb_t *db, const char *tag, int32_t  *out_value);
-int  bp_tagdb_write_dint(bp_tagdb_t *db, const char *tag, int32_t   value);
+/* Signed scalars */
+int  bp_tagdb_read_sint  (bp_tagdb_t *db, const char *tag,  int8_t  *out_value);
+int  bp_tagdb_write_sint (bp_tagdb_t *db, const char *tag,  int8_t   value);
+int  bp_tagdb_read_int   (bp_tagdb_t *db, const char *tag, int16_t  *out_value);
+int  bp_tagdb_write_int  (bp_tagdb_t *db, const char *tag, int16_t   value);
+int  bp_tagdb_read_dint  (bp_tagdb_t *db, const char *tag, int32_t  *out_value);
+int  bp_tagdb_write_dint (bp_tagdb_t *db, const char *tag, int32_t   value);
+int  bp_tagdb_read_lint  (bp_tagdb_t *db, const char *tag, int64_t  *out_value);
+int  bp_tagdb_write_lint (bp_tagdb_t *db, const char *tag, int64_t   value);
 
-int  bp_tagdb_read_int  (bp_tagdb_t *db, const char *tag, int16_t  *out_value);
-int  bp_tagdb_write_int (bp_tagdb_t *db, const char *tag, int16_t   value);
+/* Unsigned scalars */
+int  bp_tagdb_read_usint (bp_tagdb_t *db, const char *tag, uint8_t  *out_value);
+int  bp_tagdb_write_usint(bp_tagdb_t *db, const char *tag, uint8_t   value);
+int  bp_tagdb_read_uint  (bp_tagdb_t *db, const char *tag, uint16_t *out_value);
+int  bp_tagdb_write_uint (bp_tagdb_t *db, const char *tag, uint16_t  value);
+int  bp_tagdb_read_udint (bp_tagdb_t *db, const char *tag, uint32_t *out_value);
+int  bp_tagdb_write_udint(bp_tagdb_t *db, const char *tag, uint32_t  value);
+int  bp_tagdb_read_ulint (bp_tagdb_t *db, const char *tag, uint64_t *out_value);
+int  bp_tagdb_write_ulint(bp_tagdb_t *db, const char *tag, uint64_t  value);
 
-int  bp_tagdb_read_lint (bp_tagdb_t *db, const char *tag, int64_t  *out_value);
-int  bp_tagdb_write_lint(bp_tagdb_t *db, const char *tag, int64_t   value);
+/* Floats */
+int  bp_tagdb_read_real  (bp_tagdb_t *db, const char *tag, float    *out_value);
+int  bp_tagdb_write_real (bp_tagdb_t *db, const char *tag, float     value);
+int  bp_tagdb_read_lreal (bp_tagdb_t *db, const char *tag, double   *out_value);
+int  bp_tagdb_write_lreal(bp_tagdb_t *db, const char *tag, double    value);
 
-int  bp_tagdb_read_bool (bp_tagdb_t *db, const char *tag, int      *out_value);
-int  bp_tagdb_write_bool(bp_tagdb_t *db, const char *tag, int       value);
+/* BOOL — Logix BOOL scalars are 1 byte on the wire (0 or 1).
+ *
+ * Note: BOOL[] ARRAYS are bit-packed in DWORDs (32 bits per word).  We do
+ * NOT auto-handle that; if you need a BOOL array, read it as
+ * uint32_t-array and unpack bits caller-side, or address members of a
+ * struct's BOOL field by name. */
+int  bp_tagdb_read_bool  (bp_tagdb_t *db, const char *tag, int *out_value);
+int  bp_tagdb_write_bool (bp_tagdb_t *db, const char *tag, int  value);
 
-int  bp_tagdb_read_real (bp_tagdb_t *db, const char *tag, float    *out_value);
-int  bp_tagdb_write_real(bp_tagdb_t *db, const char *tag, float     value);
+/* ============================================================
+ * Array helpers — one round-trip reads/writes `count` elements.
+ *
+ * The tag_name can include an index (e.g. "MyArr[5]") to read a
+ * slice starting at that offset.  If you pass the bare array name
+ * (e.g. "MyArr") with elem_count = N, you get [0..N-1].
+ *
+ * The caller-supplied buffer must hold count * sizeof(element)
+ * bytes (e.g. uint32_t buf[N] for DINT/UDINT/REAL).
+ *
+ * Max practical count: ~75,000 32-bit elements (slot data area is
+ * ~305 KB) — for larger arrays, batch with multiple calls.
+ * ============================================================ */
 
-int  bp_tagdb_read_lreal (bp_tagdb_t *db, const char *tag, double *out_value);
-int  bp_tagdb_write_lreal(bp_tagdb_t *db, const char *tag, double  value);
+int  bp_tagdb_read_sint_array  (bp_tagdb_t *db, const char *tag,
+                                  int8_t *out_array, uint16_t count);
+int  bp_tagdb_write_sint_array (bp_tagdb_t *db, const char *tag,
+                                  const  int8_t *in_array, uint16_t count);
+int  bp_tagdb_read_usint_array (bp_tagdb_t *db, const char *tag,
+                                  uint8_t *out_array, uint16_t count);
+int  bp_tagdb_write_usint_array(bp_tagdb_t *db, const char *tag,
+                                  const uint8_t *in_array, uint16_t count);
+
+int  bp_tagdb_read_int_array   (bp_tagdb_t *db, const char *tag,
+                                  int16_t *out_array, uint16_t count);
+int  bp_tagdb_write_int_array  (bp_tagdb_t *db, const char *tag,
+                                  const int16_t *in_array, uint16_t count);
+int  bp_tagdb_read_uint_array  (bp_tagdb_t *db, const char *tag,
+                                  uint16_t *out_array, uint16_t count);
+int  bp_tagdb_write_uint_array (bp_tagdb_t *db, const char *tag,
+                                  const uint16_t *in_array, uint16_t count);
+
+int  bp_tagdb_read_dint_array  (bp_tagdb_t *db, const char *tag,
+                                  int32_t *out_array, uint16_t count);
+int  bp_tagdb_write_dint_array (bp_tagdb_t *db, const char *tag,
+                                  const int32_t *in_array, uint16_t count);
+int  bp_tagdb_read_udint_array (bp_tagdb_t *db, const char *tag,
+                                  uint32_t *out_array, uint16_t count);
+int  bp_tagdb_write_udint_array(bp_tagdb_t *db, const char *tag,
+                                  const uint32_t *in_array, uint16_t count);
+
+int  bp_tagdb_read_lint_array  (bp_tagdb_t *db, const char *tag,
+                                  int64_t *out_array, uint16_t count);
+int  bp_tagdb_write_lint_array (bp_tagdb_t *db, const char *tag,
+                                  const int64_t *in_array, uint16_t count);
+int  bp_tagdb_read_ulint_array (bp_tagdb_t *db, const char *tag,
+                                  uint64_t *out_array, uint16_t count);
+int  bp_tagdb_write_ulint_array(bp_tagdb_t *db, const char *tag,
+                                  const uint64_t *in_array, uint16_t count);
+
+int  bp_tagdb_read_real_array  (bp_tagdb_t *db, const char *tag,
+                                  float *out_array, uint16_t count);
+int  bp_tagdb_write_real_array (bp_tagdb_t *db, const char *tag,
+                                  const float *in_array, uint16_t count);
+int  bp_tagdb_read_lreal_array (bp_tagdb_t *db, const char *tag,
+                                  double *out_array, uint16_t count);
+int  bp_tagdb_write_lreal_array(bp_tagdb_t *db, const char *tag,
+                                  const double *in_array, uint16_t count);
+
+/* ============================================================
+ * STRING — Allen-Bradley Logix STRING (LEN:DINT + DATA:SINT[82]).
+ *
+ * bp_tagdb_read_string reads tag.LEN (DINT) and tag.DATA (SINT[]),
+ * writes up to (out_size - 1) bytes of DATA into out_buf, NUL-
+ * terminates, and stores the original LEN value in *out_len if
+ * non-NULL.  If the string is longer than out_size, the output is
+ * truncated (the on-PLC LEN is unchanged).
+ *
+ * bp_tagdb_write_string writes in_len bytes of in_data to tag.DATA
+ * and sets tag.LEN to in_len.  Max in_len is 82 (Logix default
+ * STRING length).
+ *
+ * Both calls do TWO IPC roundtrips internally (LEN and DATA are
+ * accessed separately).
+ * ============================================================ */
+int  bp_tagdb_read_string (bp_tagdb_t *db, const char *tag,
+                           char *out_buf, size_t out_size,
+                           size_t *out_len);
+int  bp_tagdb_write_string(bp_tagdb_t *db, const char *tag,
+                           const char *in_data, size_t in_len);
 
 #ifdef __cplusplus
 }
