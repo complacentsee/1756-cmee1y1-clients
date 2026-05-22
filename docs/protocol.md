@@ -407,59 +407,200 @@ Range and validity rules:
 | `timeout_ms` | clamped to min 26 | silent; retry budget exhausts → engine rc=14 |
 | `resp_capacity` | `> 0` | SDK returns `BP_ERR_NULL_ARG` |
 
-### Connected messaging — open issues
+### Connected messaging — wire format
 
-The `OCXcip_TxRxOpenConn` / `OCXcip_TxRxMsg` / `OCXcip_TxRxCloseConn`
-APIs are documented for completeness but **do not work on cm1756**.
+Class-3 connected messaging on cm1756 is implemented by the SDK by
+**bypassing the broken `OCXcip_TxRxOpenConn` family** and routing
+all three lifecycle calls through `bp_client_message_send` (mbox
+0x200, UCMM transport).  The PLC's connection state machine is
+driven entirely by the CIP service bytes the SDK sends; the chip's
+mailbox transport is irrelevant to whether the PLC considers a
+connection open.
 
-Symptom: `OCXcip_TxRxOpenConn` always returns rc=`0x1001` (4097)
-regardless of `(slot, encoded_path, conn_params, app_handle)`.
+Why `OCXcip_TxRx*` is broken on cm1756: Ghidra RE of
+`libocxbpapi.so.2.3 @ 0x106f44` → external thunks at `0x134048+`
+shows the inner `func_0x0010664c` resolves to
+`OCXCN_OpenClass3Connection`, a PLT entry pointing to an
+`OCXCN_*` library that is not present anywhere on the cm1756 image.
+The `OCXCN_*` thunk family covers `RegisterConnectionObj`,
+`OpenClass3Connection`, `CloseClass3Connection`,
+`SendClass3Request`, `UnregisterConnectionObj` — the entire
+connection-management state machine.  The `OC_bp*` engine in
+`libocxbpeng.so.2.3` and the APex2 chip firmware are NOT involved
+at the OpenConn dispatch level, so we have no local workaround
+through that path.  The SDK keeps the `bp_client_txrx_*` public
+API for source-compatibility, but implements it directly against
+`bp_client_message_send`.
 
-Cause (Ghidra RE of libocxbpapi.so.2.3 @ 0x106f44 →
-external thunks at 0x134048+): the inner `func_0x0010664c` resolves
-to `OCXCN_OpenClass3Connection`, a PLT entry pointing to an
-`OCXCN_*` library that is not present anywhere on the cm1756 image
-we have.  The `OCXCN_*` thunk family covers `RegisterConnectionObj`,
-`OpenClass3Connection`, `CloseClass3Connection`, `SendClass3Request`,
-`UnregisterConnectionObj` — the entire connection-management
-state machine.  The `OC_bp*` engine in libocxbpeng.so.2.3 and the
-APex2 chip firmware are NOT involved at the OpenConn dispatch
-level, so we have no local workaround through that path.
+#### Sequence numbers are NOT prepended
 
-Workaround that does work today (verified 2026-05-21 on L85, slot 2):
+The sibling `historianupdate` apex2d daemon
+([`apex2_cip_connection.c:1346-1362`](../../historianupdate/driver/apex2/daemon/apex2_cip_connection.c))
+empirically established (2026-03-31, comment in source) that the
+APex2 ASIC treats all MBOX_LOOPBACK (0x200) sends identically —
+**connected vs UCMM is a CIP protocol distinction, not an ASIC
+transport distinction**.  Forward Open establishes PLC-side
+context; subsequent CIP reads ride the same UCMM transport.
 
-1. Build a Large Forward Open (CIP service `0x5B`) request body —
-   borrow the encoding from
-   [historianupdate `apex2_cip_connection.c::build_forward_open`](../../historianupdate/driver/apex2/daemon/apex2_cip_connection.c).
-2. Send it via `bp_client_message_send` with the target slot.
-3. Parse the response — reply service `0xDB`, general status `0x00`,
-   body contains the PLC-chosen O→T connection ID and the echoed
-   T→O connection ID.
+This was independently confirmed on cm1756 against an L85 in
+slot 2 (`c/examples/connexp` v0.7.0 Phase 1 experiment, 2026-05-22):
+LFO + bare Identity Get_Attributes_All + Forward_Close all
+round-tripped cleanly via three separate `bp_client_message_send`
+calls.  Round-trip latency 0.5–1.3 ms per call.
 
-Captured 2026-05-21 against L85 (slot 2):
+`cip_connected_send` in the sibling explicitly does **not** prepend
+sequence numbers to the request body — it increments
+`conn->sequence` for diagnostic tracking only.  The standalone
+[`apex2_lib.h::apex_send_connected`](../../historianupdate/driver/apex2/apex2_lib.h)
+docstring claims it writes CB+0x1E and CB+0x36, but the
+implementation never does — line 899 explicitly says "_not used by
+ASIC for MBOX_LOOPBACK_".
+
+The SDK matches this convention.  `bp_client_txrx_msg` passes the
+caller's request bytes through `bp_client_message_send`
+**unmodified**.
+
+#### Wire format
+
+**Large Forward Open** (CIP service `0x5B`).  Reference:
+[`apex2_cip_connection.c::build_forward_open` lines 682-820](../../historianupdate/driver/apex2/daemon/apex2_cip_connection.c).
+Field positions are little-endian throughout.
 
 ```
-slot=2 timeout_ms=5000
-req=5b 02 20 06 24 01 05 f7 00 00 01 80 01 00 00 80 34 12 01 00
-    ef be ad de 03 00 00 00 80 96 98 00 00 00 00 42 80 96 98 00
-    00 00 00 42 a3 02 20 02 24 01   (50 bytes, Large Forward Open)
-
-resp (30 bytes):
-db 00 00 00 2f 04 02 80 01 00 00 80 34 12 01 00
-ef be ad de 80 96 98 00 80 96 98 00 00 00
-^^^^^^^^^^^ ^^^^^^^^^^^ ^^^^^^^^^^^
-reply hdr   O→T conn ID T→O conn ID (= 0x80000001 echo'd)
-                = 0x8002042f
+off len field
++00 1   service = 0x5B
++01 1   path_size_words = 0x02
++02 4   class 6 (CM) inst 1     20 06 24 01
++06 1   priority/tick           0x05
++07 1   timeout ticks           0xF7
++08 4   O→T conn ID hint        originator-chosen, target overrides; OCX uses 0x80010000
++0C 4   T→O conn ID hint        originator-chosen, PLC echoes unchanged; OCX uses 0x80000001 (bit 31 required by L73 fw v21)
++10 2   connection serial       originator-chosen; must be unique within active set
++12 2   vendor ID               0x0001 (Rockwell)
++14 4   originator serial       random — duplicate triggers PLC error
++18 4   timeout multiplier      0x00000003 → RPI × 4 = ~40 s
++1C 4   O→T RPI µs              10_000_000 (= 10 s, matches OCX)
++20 4   O→T conn params         0x42000FA0 = P2P, variable, 4000 B (FO_REQUEST_OT_SIZE in sibling)
++24 4   T→O RPI µs              10_000_000
++28 4   T→O conn params         0x42000FA0
++2C 1   transport trigger       0xA3 (Class 3, server)
++2D 1   conn path_size_words    0x02
++2E 4   conn path               20 02 24 01 (Msg Router class 2 inst 1)
+total: 50 bytes
 ```
 
-Whether subsequent **connected** sends/receives work via the same
-UCMM transport path remains to be tested.  The sibling apex2d
-daemon (`apex2_cip_connection.c::cip_connected_send`) reports that
-on the same chip family CB+0x1D=0x0D (UCMM round-trip) carries
-connected payloads transparently — the PLC sees the connection
-because it has already accepted the Forward Open and routes by
-the embedded connection ID — but this requires sequence-number
-prepending and is beyond the scope of the current SDK.
+**LFO reply** — service `0xDB` (success) or `0xD4` (small FO; not
+emitted by L85).  Header = 4 bytes + `resp[3] * 2` (extended status
+words; 0 in the success case).
+
+```
+off len field                   notes
++00 1   reply service = 0xDB
++01 1   reserved = 0x00
++02 1   general status          0x00 = success
++03 1   ext_status size words   0x00
++04 4   O→T conn ID             PLC-chosen — use as routing tag for connected sends
++08 4   T→O conn ID             echo of our T→O hint
++0C 2   echo of our conn serial
++0E 2   echo of our vendor ID
++10 4   echo of our orig serial
++14 4   actual O→T RPI µs       PLC may negotiate down
++18 4   actual T→O RPI µs
++1C 1   reply size              # words of extra app reply data
++1D 1   reserved
+```
+
+Captured against L85 (slot 2, 2026-05-22 from connexp):
+
+```
+req (50 B):
+  5b 02 20 06 24 01 05 f7 00 00 01 80 01 00 00 80
+  a8 a5 01 00 56 80 1d 67 03 00 00 00 80 96 98 00
+  a0 0f 00 42 80 96 98 00 a0 0f 00 42 a3 02 20 02
+  24 01
+                                                   conn_serial = 0xa5a8
+                                                   orig_serial = 0x671d8056
+                                                   ot_params   = 0x42000fa0
+resp (30 B):
+  db 00 00 00 35 04 02 80 01 00 00 80 a8 a5 01 00
+  56 80 1d 67 80 96 98 00 80 96 98 00 00 00
+  ^^^^^^^^^^^ ^^^^^^^^^^^ ^^^^^^^^^^^
+  reply hdr   O→T conn ID T→O conn ID = 0x80000001 (echo)
+              = 0x80020435
+```
+
+**Forward_Close** (CIP service `0x4E`).  Reference:
+[`apex2_cip_connection.c::build_forward_close` lines 1244-1283](../../historianupdate/driver/apex2/daemon/apex2_cip_connection.c).
+All four identifier fields must echo the LFO exactly — the PLC
+matches against its connection table.
+
+```
+off len field                   notes
++00 1   service = 0x4E
++01 1   path_size_words = 0x02
++02 4   class 6 (CM) inst 1     20 06 24 01
++06 1   priority/tick           0x0A
++07 1   timeout ticks           0x0E
++08 2   conn serial             must match LFO
++0A 2   vendor ID               must match LFO
++0C 4   orig serial             must match LFO
++10 1   conn path_size_words    0x02
++11 1   reserved                0x00
++12 4   conn path               20 02 24 01
+total: 22 bytes
+```
+
+**FC reply** — service `0xCE` (= 0x4E | 0x80).
+
+```
++00 1   reply service = 0xCE
++01 1   reserved
++02 1   general status         0x00 = success; conn fully removed from PLC table
++03 1   ext_status size words
++04 2   echo conn serial
++06 2   echo vendor ID
++08 4   echo orig serial
++0C 1   reply size (words)
++0D 1   reserved
+```
+
+Captured FC against L85 (14 B):
+`ce 00 00 00 a8 a5 01 00 56 80 1d 67 00 00`
+
+#### Connected sends ride the LFO-established context
+
+After a successful LFO, subsequent CIP requests sent via
+`bp_client_message_send` to the same slot reach the PLC and are
+processed in the context of the open connection.  The PLC does
+**not** require the request body to carry a connection ID or
+sequence number for this to work — those fields are part of the
+on-wire CPF address item that the chip firmware emits, not part
+of the CIP service bytes the host hands to `MessageSend`.
+
+What this means for the SDK:
+
+- `bp_client_txrx_open` builds + sends LFO; caches
+  `(conn_serial, vendor_id, orig_serial, ot_conn_id, to_conn_id)`
+  for the Forward_Close, plus a per-connection sequence counter
+  for diagnostics only.
+- `bp_client_txrx_msg` passes the caller's request through
+  `bp_client_message_send` byte-for-byte.
+- `bp_client_txrx_close` builds + sends Forward_Close using the
+  cached identifiers.
+
+#### Known limitation: small-buffer transport only
+
+Routing through `bp_client_message_send` uses chip mailbox `0x200`
+(UCMM path), which caps single-frame payloads at ~500 bytes (the
+`BP_MSG_MAX_REQ = 500` limit documented above).  The real benefit
+of CIP Class 3 connected messaging on this chip family — 4002-byte
+packets via mailbox `0x204` with pre-registered transport CBs — is
+not reachable through `OCXcip_MessageSend` and requires direct
+userland SHRAM access through `/dev/ocx_shram` + `/dev/ocx_cbregs`
+(the path the sibling apex2d daemon uses).
+
+This is **v0.8 RE territory**, tracked separately.  For v0.7.0,
+TxRx* is functional with the same envelope size as MessageSend.
 
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 
