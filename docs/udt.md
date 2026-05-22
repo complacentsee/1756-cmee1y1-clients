@@ -113,12 +113,13 @@ expose their shape via `bp_symbol_info_t`:
 ```c
 bp_symbol_info_t info;
 bp_tagdb_symbol_at(db, idx, &info);
-/* For DINT[5,3]:        info.dim0 = 5, info.dim1 = 3, rank = 2 */
-/* For DINT[10]:         info.dim0 = 10, info.dim1 = 0, rank = 1 */
-/* For scalar DINT:      info.dim0 = 0,  info.dim1 = 0, rank = 0 */
+/* For DINT[5,10,30]:    info.dim0 = 5, info.dim1 = 10, info.dim2 = 30, rank = 3 */
+/* For DINT[5,3]:        info.dim0 = 5, info.dim1 = 3,  info.dim2 = 0,  rank = 2 */
+/* For DINT[10]:         info.dim0 = 10, info.dim1 = 0, info.dim2 = 0,  rank = 1 */
+/* For scalar DINT:      info.dim0 = 0,  info.dim1 = 0, info.dim2 = 0,  rank = 0 */
 
 int  r = bp_symbol_rank(&info);              /* 0/1/2/3 */
-uint32_t n = bp_symbol_total_elements(&info); /* dim0 * dim1 (or 1) */
+uint32_t n = bp_symbol_total_elements(&info); /* dim0 * dim1 * dim2 (zero dims treated as 1) */
 ```
 
 **Element addressing uses comma-separated indices** in the tag
@@ -145,9 +146,12 @@ bp_tagdb_read_dint_array(db, "MyDintArr2D[0,0]", all, 15);
 /* all[i*3 + j] is element [i,j] */
 ```
 
-**3-D array introspection is not yet characterised.** The symbol-info
-struct exposes only `dim0` and `dim1`. If you have a 3-D Logix array
-tag, please contribute a sample for layout RE.
+**3-D arrays at the tag level are fully introspected** — `dim2` at
+slot offset `+0x78` of the symbol-info struct.  Element addressing
+uses three-comma-separated indices (e.g. `"MyArr[2,3,1]"`); the
+PLC returns elements in **row-major linear order**, so reading the
+whole array is one batched call starting from `[0,0,0]` with
+`elem_count = dim0 * dim1 * dim2`.
 
 **Multi-dim arrays as UDT members** likewise aren't fully
 introspected — `bp_struct_member_info_t.array_count` holds the
@@ -197,7 +201,6 @@ udtinfo --path P:1,S:2 --struct-id 0x21    # the AB STRING UDT
 
 ## What's not (yet) supported
 
-- **3-D array tags** — symbol-info exposes only `dim0`/`dim1`
 - **Multi-dim arrays as UDT members** — `array_count` is the first
   dim only
 - **Whole-struct one-shot read** — see "Gotcha" above

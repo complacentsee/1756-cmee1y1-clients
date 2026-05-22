@@ -302,12 +302,12 @@ int bp_tagdb_symbol_at(bp_tagdb_t *db, uint16_t index,
     memcpy(out_info->name, ctx.raw, name_len);
     out_info->name[name_len] = 0;
 
-    out_info->data_type   = bp_ld_u16(ctx.raw + BP_SYM_DATATYPE_OFF);
-    out_info->struct_type = bp_ld_u16(ctx.raw + BP_SYM_STRUCTTYPE_OFF);
-    out_info->elem_byte_size = bp_ld_u32(ctx.raw + BP_SYM_FIELD1_OFF);
-    out_info->dim0           = bp_ld_u32(ctx.raw + BP_SYM_FIELD2_OFF);
-    out_info->dim1           = bp_ld_u32(ctx.raw + BP_SYM_FIELD3_OFF);
-    out_info->instance_id = bp_ld_u32(ctx.raw + BP_SYM_INSTID_OFF);
-    out_info->flags       = bp_ld_u16(ctx.raw + BP_SYM_FLAGS_OFF);
+    out_info->data_type      = bp_ld_u16(ctx.raw + BP_SYM_DATATYPE_OFF);
+    out_info->struct_type    = bp_ld_u16(ctx.raw + BP_SYM_STRUCTTYPE_OFF);
+    out_info->elem_byte_size = bp_ld_u32(ctx.raw + BP_SYM_ELEMSIZE_OFF);
+    out_info->dim0           = bp_ld_u32(ctx.raw + BP_SYM_DIM0_OFF);
+    out_info->dim1           = bp_ld_u32(ctx.raw + BP_SYM_DIM1_OFF);
+    out_info->dim2           = bp_ld_u32(ctx.raw + BP_SYM_DIM2_OFF);
+    out_info->flags          = bp_ld_u16(ctx.raw + BP_SYM_FLAGS_OFF);
     return BP_OK;
 }

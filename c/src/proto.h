@@ -60,10 +60,10 @@
 #define BP_SYM_NAME_OFF        0x00u   /* char[100] NUL-terminated */
 #define BP_SYM_DATATYPE_OFF    0x64u   /* uint16 */
 #define BP_SYM_STRUCTTYPE_OFF  0x68u   /* uint16 */
-#define BP_SYM_FIELD1_OFF      0x6Cu   /* uint32 */
-#define BP_SYM_FIELD2_OFF      0x70u   /* uint32 */
-#define BP_SYM_FIELD3_OFF      0x74u   /* uint32 */
-#define BP_SYM_INSTID_OFF      0x78u   /* uint32 */
+#define BP_SYM_ELEMSIZE_OFF    0x6Cu   /* uint32 elem_byte_size */
+#define BP_SYM_DIM0_OFF        0x70u   /* uint32 dim0 (0 if scalar) */
+#define BP_SYM_DIM1_OFF        0x74u   /* uint32 dim1 (0 if rank < 2) */
+#define BP_SYM_DIM2_OFF        0x78u   /* uint32 dim2 (0 if rank < 3) */
 #define BP_SYM_FLAGS_OFF       0x7Cu   /* uint16 */
 
 /* ----- Internal Client + TagDB structs (private to the library) ----- */

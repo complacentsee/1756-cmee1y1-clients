@@ -29,6 +29,9 @@ RUN apt-get update && \
         libc6 && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/lib/libbpclient.so* /usr/local/lib/
-COPY --from=build /out/bin/tagtest /usr/local/bin/tagtest
+COPY --from=build /out/bin/ /usr/local/bin/
 RUN ldconfig
+# Default ENTRYPOINT is tagtest (canonical smoke test).  Override with
+# --entrypoint /usr/local/bin/<tool> to run discover, dumpsym, symprobe,
+# structprobe, udtinfo, findtags, or typetest.
 ENTRYPOINT ["/usr/local/bin/tagtest"]

@@ -11,6 +11,9 @@
  *            [--lreal TAG]
  *            [--string TAG]
  *            [--dint-array TAG --array-count N]
+ *            [--bool-array TAG --bool-array-count N]
+ *            [--dint-2d TAG --dint-2d-dim0 N --dint-2d-dim1 M]
+ *            [--dint-3d TAG --dint-3d-dim0 N --dint-3d-dim1 M --dint-3d-dim2 K]
  *
  * Pass --skip-* to disable a section.  Exit 0 if all enabled sections
  * pass; 1 if any fail; 2 on infrastructure errors.
@@ -248,6 +251,67 @@ static void test_dint_2d(bp_tagdb_t *db, const char *tag, int dim0, int dim1) {
     free(v0); free(probe); free(v1);
 }
 
+static void test_dint_3d(bp_tagdb_t *db, const char *tag,
+                          int dim0, int dim1, int dim2) {
+    if (!tag || dim0 <= 0 || dim1 <= 0 || dim2 <= 0) return;
+    int total = dim0 * dim1 * dim2;
+    printf("\n[dint 3-D] tag=%s dims=%d,%d,%d (total=%d)\n",
+           tag, dim0, dim1, dim2, total);
+    int32_t *v0    = calloc(total, sizeof(int32_t));
+    int32_t *probe = calloc(total, sizeof(int32_t));
+    int32_t *v1    = calloc(total, sizeof(int32_t));
+    if (!v0 || !probe || !v1) {
+        free(v0); free(probe); free(v1); g_fail++; return;
+    }
+
+    /* Build "tag[0,0,0]" for the batched read */
+    char zero_idx[256];
+    snprintf(zero_idx, sizeof(zero_idx), "%s[0,0,0]", tag);
+
+    MAYBE_ERR(bp_tagdb_read_dint_array(db, zero_idx, v0, (uint16_t)total),
+              "initial read");
+    printf("  V0 (first 6 = first plane row): %d %d %d %d %d %d\n",
+           v0[0], v0[1], v0[2], v0[3], v0[4], v0[5]);
+
+    /* Probe: row-major linear index encodes (i,j,k) as 100000*i + 1000*j + k.
+     * Row-major linear ordering: lin = i*(dim1*dim2) + j*dim2 + k */
+    for (int i = 0; i < dim0; i++)
+        for (int j = 0; j < dim1; j++)
+            for (int k = 0; k < dim2; k++) {
+                int lin = i * (dim1 * dim2) + j * dim2 + k;
+                probe[lin] = 100000 * i + 1000 * j + k;
+            }
+    MAYBE_ERR(bp_tagdb_write_dint_array(db, zero_idx, probe, (uint16_t)total),
+              "write");
+
+    MAYBE_ERR(bp_tagdb_read_dint_array(db, zero_idx, v1, (uint16_t)total),
+              "post-write read");
+    int all_match = 1;
+    for (int i = 0; i < total; i++) if (v1[i] != probe[i]) all_match = 0;
+    if (all_match) {
+        printf("    ok (batched readback row-major matches all %d)\n", total);
+        g_pass++;
+    } else {
+        printf("    FAIL: batched readback mismatch\n");
+        g_fail++;
+    }
+
+    /* Element-by-index spot check: middle of each dimension */
+    int mi = dim0 / 2, mj = dim1 / 2, mk = dim2 / 2;
+    char idx[256];
+    snprintf(idx, sizeof(idx), "%s[%d,%d,%d]", tag, mi, mj, mk);
+    int32_t spot;
+    MAYBE_ERR(bp_tagdb_read_dint(db, idx, &spot), "indexed read");
+    int32_t expect = 100000 * mi + 1000 * mj + mk;
+    printf("  %s = %d (expect %d) %s\n", idx, spot, expect,
+           spot == expect ? "ok" : "FAIL");
+    if (spot == expect) g_pass++; else g_fail++;
+
+    /* Restore */
+    bp_tagdb_write_dint_array(db, zero_idx, v0, (uint16_t)total);
+    free(v0); free(probe); free(v1);
+}
+
 static void test_dint_array(bp_tagdb_t *db, const char *tag, int count) {
     if (!tag || count <= 0) return;
     printf("\n[dint array] tag=%s count=%d\n", tag, count);
@@ -291,6 +355,8 @@ int main(int argc, char *argv[]) {
     int bool_arr_count = 0;
     const char *dint_2d_tag = NULL;
     int dint_2d_dim0 = 0, dint_2d_dim1 = 0;
+    const char *dint_3d_tag = NULL;
+    int dint_3d_dim0 = 0, dint_3d_dim1 = 0, dint_3d_dim2 = 0;
 
     static struct option opts[] = {
         {"path",   required_argument, 0, 'p'},
@@ -313,10 +379,14 @@ int main(int argc, char *argv[]) {
         {"dint-2d",      required_argument, 0, 'X'},
         {"dint-2d-dim0", required_argument, 0, 'Y'},
         {"dint-2d-dim1", required_argument, 0, 'Z'},
+        {"dint-3d",      required_argument, 0, 'Q'},
+        {"dint-3d-dim0", required_argument, 0, 'R'},
+        {"dint-3d-dim1", required_argument, 0, 'S'},
+        {"dint-3d-dim2", required_argument, 0, 'T'},
         {0,0,0,0}
     };
     int c, idx;
-    while ((c = getopt_long(argc, argv, "p:a:n:A:N:X:Y:Z:", opts, &idx)) != -1) {
+    while ((c = getopt_long(argc, argv, "p:a:n:A:N:X:Y:Z:Q:R:S:T:", opts, &idx)) != -1) {
         if (c == 'p') path = optarg;
         else if (c == 'a') array_tag = optarg;
         else if (c == 'n') array_count = atoi(optarg);
@@ -325,6 +395,10 @@ int main(int argc, char *argv[]) {
         else if (c == 'X') dint_2d_tag = optarg;
         else if (c == 'Y') dint_2d_dim0 = atoi(optarg);
         else if (c == 'Z') dint_2d_dim1 = atoi(optarg);
+        else if (c == 'Q') dint_3d_tag = optarg;
+        else if (c == 'R') dint_3d_dim0 = atoi(optarg);
+        else if (c == 'S') dint_3d_dim1 = atoi(optarg);
+        else if (c == 'T') dint_3d_dim2 = atoi(optarg);
         else if (c >= 1000) tags[c - 1000] = optarg;
     }
 
@@ -354,6 +428,7 @@ int main(int argc, char *argv[]) {
     test_dint_array(db, array_tag, array_count);
     test_bool_array(db, bool_arr_tag, bool_arr_count);
     test_dint_2d(db, dint_2d_tag, dint_2d_dim0, dint_2d_dim1);
+    test_dint_3d(db, dint_3d_tag, dint_3d_dim0, dint_3d_dim1, dint_3d_dim2);
 
     bp_tagdb_close(db); bp_client_close(cl);
 

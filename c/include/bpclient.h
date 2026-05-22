@@ -125,7 +125,10 @@ typedef struct {
     uint32_t elem_byte_size; /* bytes per element (or struct byte size for UDTs) */
     uint32_t dim0;           /* outer dimension; 0 if scalar.  For DINT[5,3] this is 5. */
     uint32_t dim1;           /* second dimension; 0 if 1-D or scalar.  For DINT[5,3] this is 3. */
-    uint32_t instance_id;
+    uint32_t dim2;           /* third dimension; 0 if rank < 3.  For DINT[5,10,30] this is 30.
+                              * (Earlier revisions of this struct named this field "instance_id"
+                              * because the wrapper docs assumed only 2-D arrays were possible;
+                              * empirical 3-D dump showed this slot holds dim2.) */
     uint16_t flags;
 } bp_symbol_info_t;
 
@@ -140,23 +143,25 @@ int      bp_symbol_is_array (const bp_symbol_info_t *info);  /* 1 = array,  0 = 
 int      bp_symbol_is_struct(const bp_symbol_info_t *info);  /* 1 = UDT,   0 = atomic */
 uint16_t bp_symbol_type_code(const bp_symbol_info_t *info);  /* data_type & 0x1FFF */
 
-/* Array rank: 0 for scalar, 1 for DINT[N], 2 for DINT[N,M], etc.
- * Logix supports up to 3 dimensions in tag declarations, but the
- * symbol-info struct only exposes the first two — if you need 3-D
- * array introspection, please contribute a sample for layout RE. */
+/* Array rank: 0 for scalar, 1 for DINT[N], 2 for DINT[N,M], 3 for
+ * DINT[N,M,K].  Logix supports a maximum of 3 dimensions in tag
+ * declarations. */
 static inline int bp_symbol_rank(const bp_symbol_info_t *info) {
     if (!info)            return 0;
+    if (info->dim2 != 0)  return 3;
     if (info->dim1 != 0)  return 2;
     if (info->dim0 != 0)  return 1;
     return 0;
 }
 
-/* Total element count: 1 for scalar, dim0 for 1-D, dim0*dim1 for 2-D. */
+/* Total element count: 1 for scalar, dim0 for 1-D, dim0*dim1 for 2-D,
+ * dim0*dim1*dim2 for 3-D. */
 static inline uint32_t bp_symbol_total_elements(const bp_symbol_info_t *info) {
     if (!info)            return 0;
     uint32_t d0 = info->dim0 ? info->dim0 : 1u;
     uint32_t d1 = info->dim1 ? info->dim1 : 1u;
-    return d0 * d1;
+    uint32_t d2 = info->dim2 ? info->dim2 : 1u;
+    return d0 * d1 * d2;
 }
 
 /* ============================================================

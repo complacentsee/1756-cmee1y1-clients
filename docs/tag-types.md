@@ -58,12 +58,15 @@ a symbol descriptor. The classic example:
 
 ```
 field2 (slot offset +0x70)   = dim0  (dimension 0 size)
-field3 (slot offset +0x74)   = dim1  (or 0 if 1-D)
+field3 (slot offset +0x74)   = dim1  (or 0 if rank < 2)
+field4 (slot offset +0x78)   = dim2  (or 0 if rank < 3)
 ```
 
-3-D arrays would carry dim2 elsewhere in the struct; we haven't
-characterised it. If you have a 3-D Logix array tag (rare), please
-contribute a sample symbol-info dump so we can document the layout.
+3-D Logix arrays carry `dim2` at slot offset `+0x78` of the
+symbol-info struct.  Verified against `Test_DINT_3D : DINT[5,10,30]`
+on L85E firmware ~36.11.  (Earlier docs misidentified this slot as
+`instance_id` because only 1-D / 2-D test tags were available, and
+those always show 0 there.)
 
 For your `OCXcip_AccessTagData` call when reading an array element
 range, use `elem_count = N` where N is the number of elements you

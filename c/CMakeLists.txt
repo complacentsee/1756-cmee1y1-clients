@@ -61,6 +61,12 @@ target_link_libraries(findtags PRIVATE bpclient pthread rt)
 add_executable(structprobe examples/structprobe.c)
 target_link_libraries(structprobe PRIVATE bpclient pthread rt)
 
+# Example: symprobe — raw-byte dump of OCXcip_GetSymbolInfo with an
+# oversized payload window (diagnostic / RE tool — used to characterize
+# 3-D array layout)
+add_executable(symprobe examples/symprobe.c)
+target_link_libraries(symprobe PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -72,5 +78,13 @@ install(TARGETS bpclient
         PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(TARGETS bpclient_static
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(TARGETS tagtest
+install(TARGETS
+            tagtest
+            discover
+            dumpsym
+            typetest
+            findtags
+            structprobe
+            symprobe
+            udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

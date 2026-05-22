@@ -239,13 +239,20 @@ struct itself, i.e. relative to `slot + 0x80`):
 +0x66  uint16     (padding)
 +0x68  uint16     struct_type      0 for atomic scalars, non-zero for UDT
 +0x6A  uint16     (padding)
-+0x6C  uint32     field1           often elem_byte_size for arrays
-+0x70  uint32     field2           array dim
-+0x74  uint32     field3           array dim
-+0x78  uint32     instance_id      symbol instance id on the PLC
++0x6C  uint32     elem_byte_size   bytes per element (or struct byte size for UDTs)
++0x70  uint32     dim0             outer dimension; 0 if scalar.  DINT[5,10,30] → 5
++0x74  uint32     dim1             middle dimension; 0 if rank < 2.  DINT[5,10,30] → 10
++0x78  uint32     dim2             inner dimension; 0 if rank < 3.  DINT[5,10,30] → 30
 +0x7C  uint16     flags            (bit 0 set: "alias"; other bits undocumented)
 +0x7E  uint16     (padding)
 ```
+
+Note: earlier RE notes (pre-Phase 1 of the 2026-05-21 SDK push) called
++0x78 `instance_id`.  An empirical 3-D dump (`Test_DINT_3D : DINT[5,10,30]`)
+showed +0x78 = 30 while remaining 0 for all scalars, 1-D, and 2-D
+tags.  Conclusion: the slot has always been `dim2`; the original
+"instance_id" label was a wrong guess from looking only at non-3-D
+shapes.
 
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 
