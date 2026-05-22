@@ -106,12 +106,6 @@ target_link_libraries(modutil PRIVATE bpclient pthread rt)
 add_executable(connidentity examples/connidentity.c)
 target_link_libraries(connidentity PRIVATE bpclient pthread rt)
 
-# Example: connexp — v0.7.0 Phase 1 experimental harness (throwaway).
-# Drives LFO + Identity + Forward_Close via three bp_client_message_send
-# calls.  Removed once the real bp_client_txrx_* implementation lands.
-add_executable(connexp examples/connexp.c)
-target_link_libraries(connexp PRIVATE bpclient pthread rt)
-
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -139,6 +133,5 @@ install(TARGETS
             actnodes
             modutil
             connidentity
-            connexp
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

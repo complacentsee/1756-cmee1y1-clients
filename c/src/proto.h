@@ -66,6 +66,25 @@
 #define BP_SYM_DIM2_OFF        0x78u   /* uint32 dim2 (0 if rank < 3) */
 #define BP_SYM_FLAGS_OFF       0x7Cu   /* uint16 */
 
+/* ----- Per-connection state (v0.7.0+ small-buffer TxRx) ----- */
+/* See docs/protocol.md "Connected messaging — wire format".  Each
+ * bp_client_txrx_open occupies one slot; bp_client_txrx_close frees
+ * it.  Lookup is by app_handle, which the caller passes through
+ * bp_conn_spec_t to every TxRx call. */
+#define BP_TXRX_MAX_CONNS  16
+
+struct bp_txrx_conn {
+    int      in_use;
+    uint16_t app_handle;       /* cache key — from bp_conn_spec_t */
+    uint8_t  slot;             /* derived from spec->encoded_path */
+    uint16_t conn_serial;      /* random, sent in LFO; echoed by FC */
+    uint16_t vendor_id;        /* 0x0001 for Rockwell */
+    uint32_t orig_serial;      /* random per-conn, must match for FC */
+    uint32_t ot_conn_id;       /* PLC-chosen, returned by LFO */
+    uint32_t to_conn_id;       /* originator-chosen, echoed by PLC */
+    uint16_t sequence;         /* diagnostic only — NOT on the wire */
+};
+
 /* ----- Internal Client + TagDB structs (private to the library) ----- */
 struct bp_client {
     int        shm_fd;
@@ -75,6 +94,8 @@ struct bp_client {
     sem_t     *sem_resp[BP_SLOT_COUNT];
     pid_t      pid;                  /* getpid() */
     pthread_mutex_t scan_mu;         /* serializes the slot scan within this process */
+    pthread_mutex_t txrx_mu;         /* protects txrx_conns table */
+    struct bp_txrx_conn txrx_conns[BP_TXRX_MAX_CONNS];
 };
 
 struct bp_tagdb {

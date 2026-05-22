@@ -1,12 +1,17 @@
 /*
  * connidentity.c — query a device's Identity via class-3 connected
- *                  messaging (Phase 5).  UCMM equivalent is
+ *                  messaging.  UCMM equivalent is
  *                  `msgprobe --slot N --req "01 02 20 01 24 01"`.
+ *
+ * Drives bp_client_txrx_open + bp_client_txrx_msg + bp_client_txrx_close
+ * to validate the v0.7.0 connected-messaging surface end-to-end on a
+ * real PLC.  Compare against `connexp` (v0.7.0 Phase 1 experimental
+ * harness, removed after Phase 2) for the equivalent flow built on
+ * raw bp_client_message_send calls.
  *
  * Usage:
  *   connidentity              # default: slot 2 (L85), path 01 02
  *   connidentity --slot 1     # explicit
- *   connidentity --path "01 02 20 06 24 01" --conn-params 0x43f8
  *
  * SPDX-License-Identifier: MIT
  */
@@ -63,7 +68,7 @@ static void print_id(const uint8_t *resp, uint16_t resp_len) {
 
 int main(int argc, char *argv[]) {
     int slot = 2;
-    int conn_params = 0x43E8;  /* P2P class-3, variable, 1000 bytes */
+    int conn_params = 0;       /* 0 → SDK default (4000-byte OT/TO size). */
     int app_handle  = 1;
     const char *path_hex = NULL;
     static struct option opts[] = {
@@ -111,11 +116,13 @@ int main(int argc, char *argv[]) {
     int rc;
     uint16_t conn_id = 0, conn_serial = 0;
     rc = bp_client_txrx_open(cl, &spec, &conn_id, &conn_serial);
-    printf("[connidentity] txrx_open rc=%d (0x%x %s)  conn_id=0x%04x  serial=0x%04x\n",
-           rc, (unsigned)rc, bp_strerror(rc), conn_id, conn_serial);
+    printf("[connidentity] txrx_open rc=%d (%s)  conn_id=0x%04x  serial=0x%04x\n",
+           rc, bp_strerror(rc), conn_id, conn_serial);
+    if (rc != BP_OK) {
+        bp_client_close(cl);
+        return 1;
+    }
 
-    /* Try TxRxMsg whether or not OpenConn succeeded — some OEM
-     * connection models auto-open on first Msg. */
     uint8_t req[]   = { 0x01, 0x02, 0x20, 0x01, 0x24, 0x01 };
     uint8_t resp[256];
     uint16_t resp_len = 0;
@@ -123,16 +130,18 @@ int main(int argc, char *argv[]) {
                              resp, sizeof(resp), &resp_len);
     printf("[connidentity] txrx_msg rc=%d (%s)  resp_len=%u\n",
            rc, bp_strerror(rc), resp_len);
+    int ok = 0;
     if (rc == BP_OK && resp_len > 0) {
         printf("response: ");
         for (uint16_t i = 0; i < resp_len; i++) printf("%02x ", resp[i]);
         printf("\n");
         print_id(resp, resp_len);
+        ok = (resp_len >= 4 && resp[0] == 0x81 && resp[2] == 0x00);
     }
 
     int crc = bp_client_txrx_close(cl, &spec);
     printf("[connidentity] txrx_close rc=%d (%s)\n", crc, bp_strerror(crc));
 
     bp_client_close(cl);
-    return 0;
+    return ok ? 0 : 1;
 }

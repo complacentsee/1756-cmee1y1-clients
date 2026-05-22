@@ -49,6 +49,8 @@ int bp_client_open(bp_client_t **out_client) {
 
     /* Local scan mutex */
     pthread_mutex_init(&c->scan_mu, NULL);
+    /* TxRx connection cache (v0.7.0 small-buffer connected messaging) */
+    pthread_mutex_init(&c->txrx_mu, NULL);
 
     /* Open the shm-lock semaphore */
     c->sem_shmlock = sem_open(BP_SEM_SHMLOCK, 0);
@@ -91,6 +93,7 @@ void bp_client_close(bp_client_t *c) {
     if (c->shm)        { munmap(c->shm, BP_SHM_TOTAL_SIZE); c->shm = NULL; }
     if (c->shm_fd >= 0) { close(c->shm_fd); c->shm_fd = -1; }
     pthread_mutex_destroy(&c->scan_mu);
+    pthread_mutex_destroy(&c->txrx_mu);
     free(c);
 }
 

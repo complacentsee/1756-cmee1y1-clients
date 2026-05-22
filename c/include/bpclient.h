@@ -230,34 +230,48 @@ int bp_client_set_display(bp_client_t *client, const char four_chars[4]);
 /* ============================================================
  * Connected (class-3) CIP messaging — TxRxOpenConn/Msg/CloseConn
  *
- * Wraps OCXcip_TxRxOpenConn, OCXcip_TxRxMsg, OCXcip_TxRxCloseConn.
+ * v0.7.0+: FUNCTIONAL.  Internally drives a Large Forward Open
+ * (CIP service 0x5B) + bare CIP request + Forward_Close (0x4E),
+ * all sent via bp_client_message_send (chip mailbox 0x200, UCMM
+ * transport).  The OCXcip_TxRx* OEM entry points are bypassed —
+ * they dispatch to OCXCN_OpenClass3Connection in an external
+ * library that is not present on the cm1756 image (Ghidra RE of
+ * libocxbpapi.so.2.3 @ 0x106f44).
  *
- * STATUS (2026-05-21): NOT FUNCTIONAL on cm1756.  OpenConn returns
- * rc=0x1001 for every (slot, path, conn_params, app_handle)
- * combination we've tried.  RE traces the failure to
- * OCXCN_OpenClass3Connection — a PLT thunk in libocxbpapi.so.2.3
- * pointing to an external OCXCN_* library that is not present in
- * any binary we have access to on this image.  The connection-
- * management state machine lives there; the OC_bp* engine and the
- * APex2 chip firmware are NOT involved in the OpenConn-level
- * dispatch, so there is no obvious local workaround.
+ * Wire format documented in docs/protocol.md "Connected messaging
+ * — wire format".  The CIP request body passed to txrx_msg is sent
+ * to the PLC byte-for-byte — no sequence-number prepending, no
+ * connection-ID embedding.  The PLC's connection state machine
+ * tracks the connection lifecycle on its end.
  *
- * Empirically verified workaround: a manual Large Forward Open
- * (CIP service 0x5B) sent via bp_client_message_send DOES succeed
- * on the L85 (slot 2) and returns valid O→T / T→O connection IDs.
- * Whether subsequent connected sends/receives work via the same
- * UCMM transport requires more wire experiments — see
- * docs/protocol.md "Connected messaging — open issues".
+ * STATE LIFECYCLE
+ *   txrx_open(spec)  → Forward_Open, caches state keyed by
+ *                       spec->app_handle inside the bp_client.
+ *   txrx_msg(spec)   → looks up the cached state, sends request
+ *                       via UCMM transport.  Returns BP_ERR_NOT_OPEN
+ *                       if no matching open.
+ *   txrx_close(spec) → Forward_Close, frees the cached state.
  *
- * These TxRx wrappers remain in the API so callers can detect the
- * 0x1001 condition and fall back, but DO NOT rely on them
- * succeeding in production code.
+ * Concurrent open() with the same app_handle on the same client
+ * returns BP_ERR_GENERIC; close() then re-open() is the correct
+ * pattern.  Up to BP_TXRX_MAX_CONNS (16) connections per client.
  *
- * Engine validation (RE'd from OCXcip_TxRxOpenConn at 0x106f44):
- *   * app_handle MUST equal 1 (else rc=1)
- *   * iRam0000000000130060 != 0 (else rc=4) — set by _initCl3Access
- *     at library load, so this is normally satisfied automatically
- *   * encoded_path non-NULL, path_size > 0 (else rc=1)
+ * KNOWN LIMITATION (v0.7.0)
+ *
+ * The transport routes through mailbox 0x200 (UCMM), capped at
+ * BP_MSG_MAX_REQ (500 bytes).  The chip's mailbox 0x204 connected-
+ * data path (4002-byte packets) is not reachable through
+ * OCXcip_MessageSend — see docs/v0.8-large-buffer-re.md for the
+ * future-work plan.  Callers needing larger payloads must chunk.
+ *
+ * VALIDATED ROUTES (v0.7.0)
+ *
+ * Only the canonical backplane-direct route is supported:
+ *   spec->encoded_path = { 0x01, slot }      port 1 = backplane
+ *   spec->path_size    = 2
+ * Multi-hop routes are not in v0.7.0; off-chassis targeting needs
+ * Unconnected_Send (svc 0x52) embedded inside the txrx_msg request
+ * body, not the route bytes.
  * ============================================================ */
 
 /* Connection spec — caller-managed, passed to every TxRx call.
@@ -272,30 +286,48 @@ typedef struct {
 } bp_conn_spec_t;
 
 /* bp_client_txrx_open
- *   Establishes a class-3 connection to the device addressed by
- *   spec->encoded_path.  Returns the engine-assigned connection_id
- *   and connection_serial; caller stores them or just discards (we
- *   key by spec->app_handle for the duration of the connection). */
+ *   Sends a Large Forward Open (CIP svc 0x5B) to the slot encoded
+ *   in spec->encoded_path (must be {0x01, slot}; see "VALIDATED
+ *   ROUTES" above).  On success, caches the connection state on
+ *   the bp_client keyed by spec->app_handle and returns:
+ *     *out_conn_id     = low 16 of the PLC-assigned O→T conn ID
+ *                        (e.g. 0x0435 for an 0x80020435 conn ID)
+ *     *out_conn_serial = the random 16-bit serial we sent in the LFO
+ *                        (echoed by the PLC's Forward_Close reply)
+ *   Either pointer may be NULL.  spec->conn_params, if non-zero,
+ *   sets the O→T / T→O size in BYTES (LFO 32-bit conn-params
+ *   low 16); 0 → 4000 (matches OCX).  Hardware max 4002.  Values
+ *   above 4002 are capped with a warning — this protects against
+ *   legacy callers that still pass a stale OEM-format 16-bit
+ *   conn_params (e.g. 0x43E8) where the meaningful fields no
+ *   longer map cleanly into the 32-bit LFO layout. */
 int bp_client_txrx_open(bp_client_t *client, const bp_conn_spec_t *spec,
                          uint16_t *out_conn_id, uint16_t *out_conn_serial);
 
 /* bp_client_txrx_msg
- *   Sends one CIP request over the connection set up by txrx_open.
- *   req points to the CIP request bytes you'd put on the wire:
+ *   Sends one CIP request over the connection identified by
+ *   spec->app_handle (must have been opened — else BP_ERR_NOT_OPEN).
+ *   req points to the CIP request bytes (sent byte-for-byte, no
+ *   sequence-number prepending — see docs/protocol.md):
  *       [service_code, path_size_words, EPATH..., body...]
  *   The response in resp[] is the raw CIP reply:
- *       [service_reply, reserved, general_status, ext_status_size, ext_status..., body...]
- *   *out_resp_size is set to the actual byte count on success;
- *   pass an initial value of resp_capacity (the caller's buffer size). */
+ *       [service_reply, reserved, general_status, ext_status_size,
+ *        ext_status..., body...]
+ *   *out_resp_size is set to the actual byte count on success.
+ *
+ *   v0.7.0 cap: req_size ≤ BP_MSG_MAX_REQ (500 bytes). */
 int bp_client_txrx_msg(bp_client_t *client, const bp_conn_spec_t *spec,
                         const void *req, uint16_t req_size,
                         void *resp, uint16_t resp_capacity,
                         uint16_t *out_resp_size);
 
 /* bp_client_txrx_close
- *   Releases the connection (Forward_Close internally).  Idempotent
- *   per spec->app_handle — calling twice for the same handle is
- *   safe but the second call typically returns an engine error. */
+ *   Sends a Forward_Close (CIP svc 0x4E) using the conn serial /
+ *   vendor / orig serial cached from the matching txrx_open.
+ *   Frees the cached state regardless of FC outcome — so the
+ *   slot becomes available for re-open even if the FC reply
+ *   indicates the PLC had already cleaned up by idle timeout.
+ *   Returns BP_ERR_NOT_OPEN if no entry matches spec->app_handle. */
 int bp_client_txrx_close(bp_client_t *client, const bp_conn_spec_t *spec);
 
 /* ============================================================
