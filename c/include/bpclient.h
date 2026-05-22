@@ -60,6 +60,7 @@ const char *bp_strerror(int rc);
 #define BP_TYPE_ULINT 0xC9
 #define BP_TYPE_REAL  0xCA
 #define BP_TYPE_LREAL 0xCB
+#define BP_TYPE_BIT_ARRAY 0xD3   /* Logix BOOL[] packed 32 bits per DWORD */
 
 /* ============================================================
  * Client lifecycle
@@ -204,14 +205,26 @@ int  bp_tagdb_write_real (bp_tagdb_t *db, const char *tag, float     value);
 int  bp_tagdb_read_lreal (bp_tagdb_t *db, const char *tag, double   *out_value);
 int  bp_tagdb_write_lreal(bp_tagdb_t *db, const char *tag, double    value);
 
-/* BOOL — Logix BOOL scalars are 1 byte on the wire (0 or 1).
- *
- * Note: BOOL[] ARRAYS are bit-packed in DWORDs (32 bits per word).  We do
- * NOT auto-handle that; if you need a BOOL array, read it as
- * uint32_t-array and unpack bits caller-side, or address members of a
- * struct's BOOL field by name. */
+/* BOOL — Logix BOOL scalars are 1 byte on the wire (0 or 1). */
 int  bp_tagdb_read_bool  (bp_tagdb_t *db, const char *tag, int *out_value);
 int  bp_tagdb_write_bool (bp_tagdb_t *db, const char *tag, int  value);
+
+/* BOOL arrays — Logix packs BOOL[N] as ceil(N/32) DWORDs on the wire,
+ * exposed as CIP type 0xD3 (BIT_ARRAY).  These helpers convert between
+ * that wire form and a caller-supplied uint8_t array (one byte per
+ * BOOL, 0 or 1).
+ *
+ * `count` must be the array's declared dimension (e.g. 32 for
+ * BOOL[32]).  The wire transfer is ceil(count/32) DWORDs internally.
+ *
+ * Write note: if count is not a multiple of 32, the trailing bits in
+ * the last DWORD are written as zeros.  This means writes to BOOL[33]
+ * will set bits 33..63 of the underlying DWORD#1 to zero.  If you
+ * only want to change SOME bits, read first, modify, then write back. */
+int  bp_tagdb_read_bool_array (bp_tagdb_t *db, const char *tag,
+                                uint8_t *out_array, uint16_t count);
+int  bp_tagdb_write_bool_array(bp_tagdb_t *db, const char *tag,
+                                const uint8_t *in_array, uint16_t count);
 
 /* ============================================================
  * Array helpers — one round-trip reads/writes `count` elements.
@@ -273,17 +286,21 @@ int  bp_tagdb_write_lreal_array(bp_tagdb_t *db, const char *tag,
                                   const double *in_array, uint16_t count);
 
 /* ============================================================
- * STRING — Allen-Bradley Logix STRING (LEN:DINT + DATA:SINT[82]).
+ * STRING — Allen-Bradley Logix STRING family (any LEN:DINT +
+ * DATA:SINT[N] UDT).  Works with the default STRING (N=82),
+ * STRING_32, STRING_512, and custom STRING-shaped UDTs.
  *
  * bp_tagdb_read_string reads tag.LEN (DINT) and tag.DATA (SINT[]),
- * writes up to (out_size - 1) bytes of DATA into out_buf, NUL-
- * terminates, and stores the original LEN value in *out_len if
- * non-NULL.  If the string is longer than out_size, the output is
- * truncated (the on-PLC LEN is unchanged).
+ * writes up to min(LEN, out_size - 1) bytes of DATA into out_buf,
+ * NUL-terminates, and stores the actual on-PLC LEN value (which may
+ * exceed out_size, indicating the result was truncated) in
+ * *out_len if non-NULL.
  *
  * bp_tagdb_write_string writes in_len bytes of in_data to tag.DATA
- * and sets tag.LEN to in_len.  Max in_len is 82 (Logix default
- * STRING length).
+ * and sets tag.LEN to in_len.  If in_len exceeds the destination
+ * struct's DATA[] capacity, the engine returns a CIP General Status
+ * error (typically 0x13 "Not enough data" or 0x15 "Too much data"),
+ * surfaced as BP_ERR_GENERIC from this function.
  *
  * Both calls do TWO IPC roundtrips internally (LEN and DATA are
  * accessed separately).

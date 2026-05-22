@@ -52,14 +52,18 @@ a symbol descriptor. The classic example:
 
 ## Detecting arrays
 
-If `data_type & 0x2000` is set, the symbol is an array. Dimensions
-live in:
+**`field2 != 0` means it's an array** (empirical: tested against
+1756-L85E firmware ~36.11 via the cm1756). The legacy
+`data_type & 0x2000` array-flag-bit is NOT set on these enumerations.
 
 ```
-field2 (slot offset +0x70)   = dim0
-field3 (slot offset +0x74)   = dim1 (or 0 if 1-D)
-... up to 3 dimensions
+field2 (slot offset +0x70)   = dim0  (dimension 0 size)
+field3 (slot offset +0x74)   = dim1  (or 0 if 1-D)
 ```
+
+3-D arrays would carry dim2 elsewhere in the struct; we haven't
+characterised it. If you have a 3-D Logix array tag (rare), please
+contribute a sample symbol-info dump so we can document the layout.
 
 For your `OCXcip_AccessTagData` call when reading an array element
 range, use `elem_count = N` where N is the number of elements you

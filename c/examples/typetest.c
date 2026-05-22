@@ -161,6 +161,48 @@ static void test_string(bp_tagdb_t *db, const char *tag) {
     MAYBE_ERR(bp_tagdb_write_string(db, tag, v0, v0_len), "restore");
 }
 
+static void test_bool_array(bp_tagdb_t *db, const char *tag, int count) {
+    if (!tag || count <= 0) return;
+    printf("\n[bool array] tag=%s count=%d\n", tag, count);
+    uint8_t *v0 = calloc(count, 1);
+    uint8_t *probe = calloc(count, 1);
+    uint8_t *v1 = calloc(count, 1);
+    if (!v0 || !probe || !v1) { free(v0); free(probe); free(v1); g_fail++; return; }
+
+    int rc = bp_tagdb_read_bool_array(db, tag, v0, (uint16_t)count);
+    if (rc != BP_OK) {
+        printf("    FAIL: initial read -> %s (%d)\n", bp_strerror(rc), rc);
+        free(v0); free(probe); free(v1); g_fail++; return;
+    }
+    printf("  V0[0..%d] =", count > 16 ? 15 : count - 1);
+    for (int i = 0; i < count && i < 16; i++) printf(" %d", v0[i]);
+    printf("%s\n", count > 16 ? " ..." : "");
+
+    /* Probe pattern: alternating 1,0,1,0,...,1 */
+    for (int i = 0; i < count; i++) probe[i] = (i & 1) ? 0 : 1;
+    rc = bp_tagdb_write_bool_array(db, tag, probe, (uint16_t)count);
+    if (rc != BP_OK) {
+        printf("    FAIL: write -> %s (%d)\n", bp_strerror(rc), rc);
+        free(v0); free(probe); free(v1); g_fail++; return;
+    }
+    rc = bp_tagdb_read_bool_array(db, tag, v1, (uint16_t)count);
+    if (rc != BP_OK) {
+        printf("    FAIL: readback -> %s (%d)\n", bp_strerror(rc), rc);
+        free(v0); free(probe); free(v1); g_fail++; return;
+    }
+    int all_match = 1;
+    for (int i = 0; i < count; i++) {
+        if (v1[i] != probe[i]) {
+            printf("    MISMATCH at bit[%d]: expected %d, got %d\n", i, probe[i], v1[i]);
+            all_match = 0;
+        }
+    }
+    if (all_match) { printf("    ok (all %d bits match)\n", count); g_pass++; }
+    else           { g_fail++; }
+    bp_tagdb_write_bool_array(db, tag, v0, (uint16_t)count);   /* restore */
+    free(v0); free(probe); free(v1);
+}
+
 static void test_dint_array(bp_tagdb_t *db, const char *tag, int count) {
     if (!tag || count <= 0) return;
     printf("\n[dint array] tag=%s count=%d\n", tag, count);
@@ -200,6 +242,8 @@ int main(int argc, char *argv[]) {
            TAG_REAL, TAG_LREAL, TAG_STRING };
     const char *array_tag = NULL;
     int array_count = 0;
+    const char *bool_arr_tag = NULL;
+    int bool_arr_count = 0;
 
     static struct option opts[] = {
         {"path",   required_argument, 0, 'p'},
@@ -217,13 +261,17 @@ int main(int argc, char *argv[]) {
         {"string", required_argument, 0, 1000+TAG_STRING},
         {"dint-array",  required_argument, 0, 'a'},
         {"array-count", required_argument, 0, 'n'},
+        {"bool-array",        required_argument, 0, 'A'},
+        {"bool-array-count",  required_argument, 0, 'N'},
         {0,0,0,0}
     };
     int c, idx;
-    while ((c = getopt_long(argc, argv, "p:a:n:", opts, &idx)) != -1) {
+    while ((c = getopt_long(argc, argv, "p:a:n:A:N:", opts, &idx)) != -1) {
         if (c == 'p') path = optarg;
         else if (c == 'a') array_tag = optarg;
         else if (c == 'n') array_count = atoi(optarg);
+        else if (c == 'A') bool_arr_tag = optarg;
+        else if (c == 'N') bool_arr_count = atoi(optarg);
         else if (c >= 1000) tags[c - 1000] = optarg;
     }
 
@@ -251,6 +299,7 @@ int main(int argc, char *argv[]) {
     test_lreal(db, tags[TAG_LREAL]);
     test_string(db, tags[TAG_STRING]);
     test_dint_array(db, array_tag, array_count);
+    test_bool_array(db, bool_arr_tag, bool_arr_count);
 
     bp_tagdb_close(db); bp_client_close(cl);
 

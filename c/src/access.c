@@ -220,10 +220,72 @@ DEFINE_ARR(real,  float,    BP_TYPE_REAL,  4)
 DEFINE_ARR(lreal, double,   BP_TYPE_LREAL, 8)
 
 /* ============================================================
- * STRING — AB Logix STRING (LEN:DINT @+0, DATA:SINT[82] @+4)
- * via .LEN / .DATA dot-notation tag access.
+ * BOOL[] arrays — wire form is CIP 0xD3 (BIT_ARRAY) packed as
+ * ceil(N/32) DWORDs.  We pack/unpack the bits and expose a
+ * byte-per-BOOL view to callers.
  * ============================================================ */
-#define BP_AB_STRING_MAX 82
+
+static inline uint16_t dwords_for_bits(uint16_t count) {
+    return (uint16_t)((count + 31u) / 32u);
+}
+
+int bp_tagdb_read_bool_array(bp_tagdb_t *db, const char *tag,
+                              uint8_t *out_array, uint16_t count) {
+    if (!out_array || count == 0) return BP_ERR_NULL_ARG;
+
+    uint16_t n_dwords = dwords_for_bits(count);
+    uint32_t *dwords = calloc(n_dwords, sizeof(uint32_t));
+    if (!dwords) return BP_ERR_CLIENT_OPEN;
+
+    bp_tag_request_t r = {
+        .tag_name = tag, .data_type = BP_TYPE_BIT_ARRAY,
+        .elem_byte_size = 4, .action = BP_ACTION_READ,
+        .elem_count = n_dwords, .data = dwords, .result = 0,
+    };
+    int rc = bp_tagdb_access(db, &r, 1);
+    if (rc != BP_OK || r.result != 0) {
+        free(dwords);
+        return rc != BP_OK ? rc : BP_ERR_GENERIC;
+    }
+    /* Unpack bits into caller's byte-per-BOOL array */
+    for (uint16_t i = 0; i < count; i++) {
+        out_array[i] = (uint8_t)((dwords[i >> 5] >> (i & 31u)) & 1u);
+    }
+    free(dwords);
+    return BP_OK;
+}
+
+int bp_tagdb_write_bool_array(bp_tagdb_t *db, const char *tag,
+                               const uint8_t *in_array, uint16_t count) {
+    if (!in_array || count == 0) return BP_ERR_NULL_ARG;
+
+    uint16_t n_dwords = dwords_for_bits(count);
+    uint32_t *dwords = calloc(n_dwords, sizeof(uint32_t));
+    if (!dwords) return BP_ERR_CLIENT_OPEN;
+
+    /* Pack bits.  Bits in [count..n_dwords*32) are zeroed by calloc. */
+    for (uint16_t i = 0; i < count; i++) {
+        if (in_array[i]) dwords[i >> 5] |= (1u << (i & 31u));
+    }
+
+    bp_tag_request_t r = {
+        .tag_name = tag, .data_type = BP_TYPE_BIT_ARRAY,
+        .elem_byte_size = 4, .action = BP_ACTION_WRITE,
+        .elem_count = n_dwords, .data = dwords, .result = 0,
+    };
+    int rc = bp_tagdb_access(db, &r, 1);
+    free(dwords);
+    if (rc != BP_OK) return rc;
+    if (r.result != 0) return BP_ERR_GENERIC;
+    return BP_OK;
+}
+
+/* ============================================================
+ * STRING — AB Logix STRING family (LEN:DINT + DATA:SINT[N])
+ * via .LEN / .DATA dot-notation tag access.  Works with default
+ * STRING (N=82) and any LEN+DATA-shaped UDT (STRING_32,
+ * STRING_512, custom).
+ * ============================================================ */
 
 int bp_tagdb_read_string(bp_tagdb_t *db, const char *tag,
                           char *out_buf, size_t out_size, size_t *out_len) {
@@ -241,32 +303,33 @@ int bp_tagdb_read_string(bp_tagdb_t *db, const char *tag,
     int rc = bp_tagdb_read_dint(db, name_len, &len_field);
     if (rc != BP_OK) return rc;
     if (len_field < 0) return BP_ERR_GENERIC;
-    if (len_field > BP_AB_STRING_MAX) len_field = BP_AB_STRING_MAX;
+    if (out_len) *out_len = (size_t)len_field;  /* report actual length even if truncated */
 
-    /* 2. Read the data (up to len_field SINTs) */
-    size_t n_to_read = (size_t)len_field;
-    if (n_to_read == 0) {
+    /* 2. Read up to min(LEN, out_size - 1) bytes of DATA.
+     *    Cap at UINT16_MAX since elem_count is uint16_t. */
+    size_t to_read = (size_t)len_field;
+    if (to_read > out_size - 1) to_read = out_size - 1;
+    if (to_read > 65535)        to_read = 65535;
+
+    if (to_read == 0) {
         out_buf[0] = '\0';
-        if (out_len) *out_len = 0;
         return BP_OK;
     }
-    int8_t  scratch[BP_AB_STRING_MAX];
-    rc = bp_tagdb_read_sint_array(db, name_data, scratch, (uint16_t)n_to_read);
-    if (rc != BP_OK) return rc;
+    int8_t *scratch = malloc(to_read);
+    if (!scratch) return BP_ERR_CLIENT_OPEN;
+    rc = bp_tagdb_read_sint_array(db, name_data, scratch, (uint16_t)to_read);
+    if (rc != BP_OK) { free(scratch); return rc; }
 
-    /* Copy into caller buffer with truncation + NUL */
-    size_t copy = n_to_read;
-    if (copy > out_size - 1) copy = out_size - 1;
-    memcpy(out_buf, scratch, copy);
-    out_buf[copy] = '\0';
-    if (out_len) *out_len = (size_t)len_field;
+    memcpy(out_buf, scratch, to_read);
+    out_buf[to_read] = '\0';
+    free(scratch);
     return BP_OK;
 }
 
 int bp_tagdb_write_string(bp_tagdb_t *db, const char *tag,
                            const char *in_data, size_t in_len) {
     if (!tag || (in_len > 0 && !in_data)) return BP_ERR_NULL_ARG;
-    if (in_len > BP_AB_STRING_MAX)         return BP_ERR_PARAM_RANGE;
+    if (in_len > 65535) return BP_ERR_PARAM_RANGE;  /* uint16 elem_count */
 
     char name_len[260], name_data[260];
     size_t tag_len = strlen(tag);
@@ -274,11 +337,14 @@ int bp_tagdb_write_string(bp_tagdb_t *db, const char *tag,
     memcpy(name_len, tag, tag_len);  memcpy(name_len + tag_len, ".LEN", 5);
     memcpy(name_data, tag, tag_len); memcpy(name_data + tag_len, ".DATA", 6);
 
-    /* 1. Write the DATA (if any) */
+    /* 1. Write the DATA (if any).  The destination's DATA[] capacity
+     * limits this; if in_len exceeds it, the engine returns CIP
+     * General Status 0x13 ("Not enough data") or similar, which
+     * surfaces as BP_ERR_GENERIC. */
     if (in_len > 0) {
-        int8_t buf[BP_AB_STRING_MAX];
-        memcpy(buf, in_data, in_len);
-        int rc = bp_tagdb_write_sint_array(db, name_data, buf, (uint16_t)in_len);
+        int rc = bp_tagdb_write_sint_array(db, name_data,
+                                            (const int8_t *)in_data,
+                                            (uint16_t)in_len);
         if (rc != BP_OK) return rc;
     }
 

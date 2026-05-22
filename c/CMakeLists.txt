@@ -52,6 +52,10 @@ target_link_libraries(dumpsym PRIVATE bpclient pthread rt)
 add_executable(typetest examples/typetest.c)
 target_link_libraries(typetest PRIVATE bpclient pthread rt m)
 
+# Example: findtags — print all symbols matching a name prefix
+add_executable(findtags examples/findtags.c)
+target_link_libraries(findtags PRIVATE bpclient pthread rt)
+
 # Install
 include(GNUInstallDirs)
 install(TARGETS bpclient

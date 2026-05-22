@@ -144,7 +144,12 @@ static void sym_read(uint8_t *slot, void *user) {
 }
 
 int bp_symbol_is_array(const bp_symbol_info_t *info) {
-    return info ? (int)((info->data_type & 0x2000u) != 0) : 0;
+    /* The Logix symbol enumeration encodes array dim0 in field2.
+     * field2 > 0 means "this is an array with at least dim0 elements".
+     * (The data_type field does NOT have the 0x2000 array bit set on
+     * tested cm1756-via-1756-L85E enumerations; field2 is the only
+     * reliable signal.) */
+    return info ? (int)(info->field2 != 0) : 0;
 }
 int bp_symbol_is_struct(const bp_symbol_info_t *info) {
     return info ? (int)(info->struct_type != 0) : 0;
