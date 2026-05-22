@@ -101,7 +101,12 @@ func main() {
 	passedRestore := true
 
 	if !*noWrite {
-		const sentinel = int32(0xDEADBEEF)
+		// 0xDEADBEEF as int32: route through a uint32 *variable*
+		// so the conversion is at runtime — Go constant arithmetic
+		// rejects int32(uint32(0xDEADBEEF)) because the value
+		// overflows the int32 range even after the intermediate cast.
+		sentinelU := uint32(0xDEADBEEF)
+		sentinel := int32(sentinelU)
 		tA = time.Now()
 		if err := db.WriteDINT(*tag, sentinel); err != nil {
 			fmt.Fprintf(os.Stderr, "[tagtest] FATAL Write 0xDEADBEEF: %v\n", err)

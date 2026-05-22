@@ -170,50 +170,8 @@ func (db *TagDB) GetStructMember(structID, memberIndex uint16) (StructMemberInfo
 	return out, translateCallErr(err)
 }
 
-// IsArray reports whether the symbol describes an array (dim0 != 0).
-func (s SymbolInfo) IsArray() bool { return s.Dim0 != 0 }
-
-// IsStruct reports whether the symbol is a UDT (struct_type != 0).
-func (s SymbolInfo) IsStruct() bool { return s.StructType != 0 }
-
-// TypeCode returns the low 13 bits of DataType (the CIP atomic
-// type code masked free of decoration flags).
-func (s SymbolInfo) TypeCode() uint16 { return s.DataType & 0x1FFF }
-
-// Rank returns the array rank: 0 scalar, 1 DINT[N], 2 DINT[N,M],
-// 3 DINT[N,M,K]. Logix caps at 3.
-func (s SymbolInfo) Rank() int {
-	switch {
-	case s.Dim2 != 0:
-		return 3
-	case s.Dim1 != 0:
-		return 2
-	case s.Dim0 != 0:
-		return 1
-	}
-	return 0
-}
-
-// TotalElements returns 1 for scalar, dim0 for 1-D, dim0*dim1 for 2-D,
-// dim0*dim1*dim2 for 3-D.
-func (s SymbolInfo) TotalElements() uint32 {
-	d0 := s.Dim0
-	if d0 == 0 {
-		d0 = 1
-	}
-	d1 := s.Dim1
-	if d1 == 0 {
-		d1 = 1
-	}
-	d2 := s.Dim2
-	if d2 == 0 {
-		d2 = 1
-	}
-	return d0 * d1 * d2
-}
-
-// IsArray reports whether the struct member is an array (flags bit 0x08).
+// IsMemberArray reports whether the struct member is an array (flags bit 0x08).
 func IsMemberArray(m StructMemberInfo) bool { return (m.Flags & 0x08) != 0 }
 
-// IsStruct reports whether the struct member is itself a UDT.
+// IsMemberStruct reports whether the struct member is itself a UDT.
 func IsMemberStruct(m StructMemberInfo) bool { return m.StructID != 0 }

@@ -22,8 +22,7 @@ RUN apt-get update && \
         build-essential ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY go.mod ./
-COPY go.sum* ./
+COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN mkdir -p /out/bin && \
