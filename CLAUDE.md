@@ -68,11 +68,12 @@ cgo use to other files without re-asking the user.
 ## What's NOT in scope
 
 - Inbound CIP intercept (chip firmware owns this, not the host).
-- Class-3 connected messaging via `OCXcip_TxRx*` — the
-  `OCXCN_OpenClass3Connection` library is missing from the cm1756
-  image, so the calls return `0x1001`. Workaround: a manual Large
-  Forward Open (CIP service `0x5B`) via UCMM. Don't try to "fix"
-  the broken path — document and move on.
+- Large-buffer (>500 B) connected messaging. v0.7.0 ships
+  small-buffer class-3 (`TxRx*` routing through `MessageSend`,
+  same ~500 B envelope). The chip's mailbox 0x204 path that
+  delivers 4002-byte packets is tracked in
+  [`docs/v0.8-large-buffer-re.md`](docs/v0.8-large-buffer-re.md);
+  don't bolt that work into v0.7.0 patches.
 - Firmware update / SystemManager territory.
 
 ## Where validation lives

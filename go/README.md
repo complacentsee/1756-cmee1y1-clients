@@ -81,7 +81,8 @@ runtime (carries glibc + dynamic loader for the cgo POSIX-sem wrapper).
 | `typetest`     | Cross-type sweep (every scalar + STRING + arrays + BOOL[] + 2-D/3-D) |
 | `msgprobe`     | Raw `OCXcip_MessageSend` + response hexdump |
 | `identity`     | Local + remote Identity dump |
-| `connidentity` | Class-3 connected Identity (NOT FUNCTIONAL on cm1756) |
+| `connidentity` | Class-3 connected Identity (LFO + bare Identity + FC) |
+| `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
@@ -101,7 +102,7 @@ go/
 │   ├── identity.go            GetIDLocal / GetDeviceID / GetActiveNodes
 │   ├── module.go              switch / LED / display
 │   ├── message.go             MessageSend (UCMM)
-│   ├── conn.go                TxRx (NOT FUNCTIONAL — see Phase 5 notes)
+│   ├── conn.go                TxRxOpen/Msg/Close (v0.7.0+ LFO via MessageSend)
 │   ├── errors.go              BPErr* constants + sentinels + ErrCode helper
 │   ├── shm/                   IPC layer (cgo for POSIX sems)
 │   │   ├── consts.go
@@ -127,9 +128,14 @@ its own slot across all 16 slots, gated by the cross-process
 
 ## Status
 
-v0.6.0. Outbound tag I/O is fully functional including the
-typed-array + BOOL[] + STRING surface (v0.6.0 parity bump). The
-class-3 connected `TxRx*` methods are kept for API parity but
-return engine code `0x1001` on cm1756 — see
-[`docs/protocol.md`](../docs/protocol.md) "Connected messaging
-— open issues".
+v0.7.0. Outbound tag I/O is fully functional including the
+typed-array + BOOL[] + STRING surface (v0.6.0) and class-3
+connected messaging (v0.7.0).  `TxRxOpen` / `TxRxMsg` / `TxRxClose`
+build Large Forward Open + Forward_Close internally and route
+through `MessageSend` — see
+[`docs/protocol.md`](../docs/protocol.md) "Connected messaging —
+wire format".
+
+Known v0.7.0 limitation: small-buffer transport (~500 B envelope
+inherited from `MessageSend`).  The 4002-byte chip-mailbox-0x204
+path is v0.8 work — see [`docs/v0.8-large-buffer-re.md`](../docs/v0.8-large-buffer-re.md).

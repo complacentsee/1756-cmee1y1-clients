@@ -16,22 +16,31 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.6.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.6.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.6.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.7.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.7.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.7.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
-and the `typetest` cross-type sweep (scalars × 11 + STRING + DINT[1-D]
-+ BOOL[] + DINT[2-D] + DINT[3-D]) **byte-identically** — see
-[`runprobe.py`](runprobe.py) for the shared cross-language runner.
+the `typetest` cross-type sweep (scalars × 11 + STRING + DINT[1-D]
++ BOOL[] + DINT[2-D] + DINT[3-D]), and the v0.7.0 `conntest`
+class-3 round-trip — all **byte-identically** modulo timings.
+See [`runprobe.py`](runprobe.py) for the shared cross-language
+runner.
 
-The class-3 connected `TxRx*` methods are kept in all three SDKs for
-API parity but return engine code `0x1001` on cm1756 — the
-`OCXCN_OpenClass3Connection` library is missing from the chip
-image. Workaround documented in
-[`docs/protocol.md`](docs/protocol.md) "Connected messaging — open
-issues".
+Class-3 connected messaging (`TxRx*` / `txrx_*`) is **functional**
+as of v0.7.0: each SDK builds Large Forward Open + Forward_Close
+internally and routes through `MessageSend` (chip mailbox 0x200,
+UCMM transport).  The OEM `OCXcip_TxRx*` entry points are not used
+— they dispatch to `OCXCN_OpenClass3Connection` in a library
+missing from the cm1756 image.  Wire format in
+[`docs/protocol.md`](docs/protocol.md) "Connected messaging —
+wire format".
+
+Known v0.7.0 limitation: small-buffer transport only (~500 B
+envelope, same as `MessageSend`).  The 4002-byte connected-data
+path via chip mailbox 0x204 is v0.8 territory — see
+[`docs/v0.8-large-buffer-re.md`](docs/v0.8-large-buffer-re.md).
 
 ## What this gives you
 
@@ -75,8 +84,43 @@ with bpclient.Client() as c:
 
 All three speak the same wire protocol with the same semantics and
 the same container plumbing. Use [`runprobe.py`](runprobe.py) to
-diff the output of `tagtest` / `typetest` / `msgprobe` across
-languages and confirm byte equivalence.
+diff the output of `tagtest` / `typetest` / `msgprobe` / `conntest`
+across languages and confirm byte equivalence.
+
+### Class-3 connected messaging (v0.7.0)
+
+A connection lifecycle in each SDK; the body bytes are sent
+byte-for-byte over the connection (no sequence-number prepending
+— see [protocol notes](docs/protocol.md)):
+
+```c
+// C
+bp_conn_spec_t spec = { .app_handle = 1,
+    .encoded_path = (uint8_t[]){0x01, 2}, .path_size = 2 };
+bp_client_txrx_open(c, &spec, NULL, NULL);
+uint8_t req[] = {0x01, 0x02, 0x20, 0x01, 0x24, 0x01};  // Identity GAA
+uint8_t resp[256]; uint16_t got = 0;
+bp_client_txrx_msg(c, &spec, req, sizeof(req), resp, sizeof(resp), &got);
+bp_client_txrx_close(c, &spec);
+```
+
+```go
+// Go
+spec := &ocxbp.ConnSpec{AppHandle: 1, EncodedPath: []byte{0x01, 2}, PathSize: 2}
+c.TxRxOpen(spec)
+resp := make([]byte, 256)
+got, _ := c.TxRxMsg(spec, []byte{0x01, 0x02, 0x20, 0x01, 0x24, 0x01},
+                     resp, uint16(len(resp)))
+c.TxRxClose(spec)
+```
+
+```python
+# Python
+spec = bpclient.ConnSpec(app_handle=1, encoded_path=b"\x01\x02", path_size=2)
+c.txrx_open(spec)
+resp = c.txrx_msg(spec, bytes([0x01, 0x02, 0x20, 0x01, 0x24, 0x01]), 256)
+c.txrx_close(spec)
+```
 
 ### Arrays + STRING
 
@@ -145,7 +189,8 @@ Override the default `tagtest` entrypoint via Docker's
 | `typetest`     | Cross-type sweep — every scalar + STRING + 1-D/2-D/3-D arrays + BOOL[] |
 | `msgprobe`     | Raw `OCXcip_MessageSend` invocation + response hexdump |
 | `identity`     | Local + remote Identity dump |
-| `connidentity` | Class-3 connected Identity (NOT FUNCTIONAL on cm1756) |
+| `connidentity` | Class-3 connected Identity (LFO + bare Identity + FC) |
+| `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
@@ -160,11 +205,12 @@ Override the default `tagtest` entrypoint via Docker's
   `docs/phase6e-firmware-has-full-cip-stack.md`) for the proof.
 - **Device management / firmware upgrade** — handled by the
   vendor's SystemManager service, not by this SDK.
-- **Class-3 connected messaging** — the `OCXCN_*` library is
-  missing from the cm1756 image. The TxRx wrappers exist for
-  parity but return `0x1001`; use UCMM messages with a manual
-  Large Forward Open (CIP service `0x5B`) for connected behavior
-  on a per-PLC basis.
+- **Large-buffer (>500 B) connected messaging** — v0.7.0 ships
+  small-buffer class-3 (LFO + bare CIP + FC routed through
+  `MessageSend`).  The chip's mailbox 0x204 path that delivers
+  4002-byte packets is not reachable through `OCXcip_MessageSend`
+  and is tracked separately in
+  [`docs/v0.8-large-buffer-re.md`](docs/v0.8-large-buffer-re.md).
 
 ## Repository layout
 

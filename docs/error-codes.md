@@ -64,6 +64,27 @@ The slot-level `errorcode` is 0 when the batch as a whole was
 processed (network round-trip completed); individual request
 failures show up only in the per-request `result` fields.
 
+## Forward_Open / Forward_Close failure modes (v0.7.0+ TxRx)
+
+`bp_client_txrx_open` / `Client.TxRxOpen` / `client.txrx_open` send
+a Large Forward Open (CIP svc `0x5B`) and parse the reply.  Common
+failures surfaced as `BP_ERR_GENERIC` with a stderr breakdown of
+the CIP status byte:
+
+| LFO reply | CIP `general_status` | Meaning | Recovery |
+|---|---|---|---|
+| `0xDB 00 00 …`              | `0x00` | Success | – |
+| `0xDB 00 02 …`              | `0x02` | Resource unavailable | Most common cause is `spec.conn_params` requesting an oversized buffer. SDK caps at 4002 B; values above the OCX-negotiated 4000 may still trip the PLC for some object classes. Pass `conn_params=0` for the safe default. |
+| `0xDB 00 05 …`              | `0x05` | Path destination unknown | Slot has no device, or the device doesn't accept Forward_Open on Msg Router (class 2 inst 1). Verify with `actnodes` / `connidentity --slot N`. |
+| `0xDB 00 01 ext=…`          | `0x01` | Connection failure (with ext status) | Common ext codes: `0x0100` "Connection in use" — the PLC still has a stale connection from a prior session; let it idle-time-out (~40 s with multiplier=3) or restart bpServer. `0x0103` "Transport class unsupported" — controller firmware rejected `0xA3`. `0x0107` "Connection ID not found in close" (FC-only). |
+| `0xDB 00 09 ext=0x0316`     | `0x09` | Invalid attribute | Connection path has a malformed segment. Should not happen with the canonical `20 02 24 01` body. |
+
+`bp_client_txrx_close` / FC failures: PLC's `Forward_Close` reply
+(`0xCE`) returns CIP general_status `0x01 ext=0x0107` if the
+connection serial / vendor / orig serial don't match its table.
+The SDK frees the cached state regardless of FC outcome — so a
+stale FC failure doesn't block subsequent re-open.
+
 ## How to test recovery flows
 
 - **`-301 PENDING` after sem_timedwait**: kill `bpServer` from the
