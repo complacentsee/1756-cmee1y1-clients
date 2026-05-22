@@ -639,6 +639,57 @@ class Client:
                     pool.inflight_zero.notify_all()
         return resp
 
+    def pool_batch(self, slot: int, reqs: "list[bytes]",
+                    resp_capacity: int) -> "list[tuple[bytes | None, BaseException | None]]":
+        """Concurrently dispatch a batch of requests through the pool.
+
+        Spawns ``min(pool.size, len(reqs))`` worker threads, each pulls
+        from a shared index counter and calls ``pool_txrx`` for one
+        request.  Blocks until all complete.
+
+        Returns a list of ``(resp_bytes, exception)`` tuples in the
+        same order as ``reqs``; exactly one of each pair is None.
+
+        Raises BpNotOpen if no pool is open for ``slot``.
+        """
+        if reqs is None:
+            raise BpNullArg("reqs is required")
+        if slot > P.MSG_MAX_SLOT:
+            raise BpSlotTooLarge(f"slot {slot} > {P.MSG_MAX_SLOT}")
+        if not reqs:
+            return []
+
+        with self._pools_mu:
+            pool = self._pools.get(slot)
+        if pool is None or not pool.initialized:
+            raise BpNotOpen(f"no pool open for slot {slot}")
+
+        worker_count = min(pool.size, len(reqs))
+        results: list[tuple[bytes | None, BaseException | None]] = \
+            [(None, None)] * len(reqs)
+        idx_lock = threading.Lock()
+        next_idx = [0]
+
+        def worker() -> None:
+            while True:
+                with idx_lock:
+                    i = next_idx[0]
+                    next_idx[0] += 1
+                if i >= len(reqs):
+                    return
+                try:
+                    resp = self.pool_txrx(slot, reqs[i], resp_capacity)
+                    results[i] = (resp, None)
+                except BaseException as e:
+                    results[i] = (None, e)
+
+        threads = [threading.Thread(target=worker,
+                                     name=f"bpclient-pool-batch-{w}")
+                   for w in range(worker_count)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        return results
+
     def pool_close(self, slot: int) -> None:
         """Stop the keepalive thread, send Forward_Close on every
         pool entry, free the state.  In-flight calls finish first.

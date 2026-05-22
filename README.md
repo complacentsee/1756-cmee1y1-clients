@@ -156,10 +156,43 @@ resp = c.pool_txrx(2, bytes([0x01, 0x02, 0x20, 0x01, 0x24, 0x01]), 256)
 c.pool_close(2)
 ```
 
-Benchmark from the cm1756 chassis (slot 2 = L85, 4 conns, 8 workers,
-25 req/worker = 200 total Identity round-trips): ~3900 req/s (C),
-~2300 req/s (Go), ~1500 req/s (Python). Compare with single-connection
-`TxRxMsg` at ~1000 req/s.
+Benchmark from the cm1756 chassis (slot 2 = L85, 4 conns, 200 Identity
+round-trips):
+
+| Mode | C | Go | Python |
+|---|---|---|---|
+| Single-conn `TxRxMsg` (sequential) | ~1000 req/s | ~750 req/s  | ~600 req/s  |
+| Pool fanout (8 worker threads)     | ~3900 req/s | ~2300 req/s | ~1500 req/s |
+| `pool_batch`  (Phase 4)            | ~4800 req/s | ~2700 req/s | ~1800 req/s |
+
+`pool_batch` submits N requests in a single call and internally fans
+them out across the pool with `min(pool.size, len(reqs))` worker
+threads — same throughput as manual fanout but a single-call API.
+
+```c
+// C — submit 200 Identity GAA requests, get them back in order.
+bp_batch_item_t items[200];
+for (int i = 0; i < 200; i++) {
+    items[i].req = identity_req;  items[i].req_size = sizeof(identity_req);
+    items[i].resp = bufs[i];      items[i].resp_capacity = 256;
+}
+bp_client_pool_batch(c, /*slot*/2, items, 200);
+// items[i].rc + items[i].resp_len populated.
+```
+
+```go
+// Go
+items := make([]ocxbp.BatchItem, 200)
+for i := range items { items[i].Req = identityReq }
+_ = c.PoolBatch(2, items, 256)
+// items[i].Resp + items[i].Err populated.
+```
+
+```python
+# Python
+results = c.pool_batch(2, [identity_req] * 200, 256)
+# results[i] is (resp_bytes, exception) — exactly one is None.
+```
 
 ### Multi-hop routes via Unconnected_Send (v0.8.0)
 

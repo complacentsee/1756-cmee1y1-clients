@@ -34,6 +34,8 @@ def main() -> int:
     ap.add_argument("--requests", type=int, default=25)
     ap.add_argument("--keepalive-ms", type=int, default=10000)
     ap.add_argument("--keepalive-test", action="store_true")
+    ap.add_argument("--batch", action="store_true",
+                    help="use pool_batch (Phase 4) instead of manual thread fanout")
     args = ap.parse_args()
 
     try:
@@ -60,38 +62,53 @@ def main() -> int:
 
         success = [0]
         failed = [0]
-        slock = threading.Lock()
-
-        def worker(wid: int) -> None:
-            local_succ = 0
-            local_fail = 0
-            for i in range(args.requests):
-                try:
-                    resp = c.pool_txrx(args.slot, IDENTITY_REQ, 256)
-                    if validate_identity(resp):
-                        local_succ += 1
-                    else:
-                        local_fail += 1
-                        print(f"[pooltest] worker={wid} req[{i}] invalid",
-                              file=sys.stderr)
-                except Exception as e:
-                    local_fail += 1
-                    print(f"[pooltest] worker={wid} req[{i}] err={e}",
-                          file=sys.stderr)
-            with slock:
-                success[0] += local_succ
-                failed[0]  += local_fail
-
-        threads = [threading.Thread(target=worker, args=(w,))
-                   for w in range(args.workers)]
-        t0 = now_ms()
-        for t in threads: t.start()
-        for t in threads: t.join()
-        t1 = now_ms()
-
         total = args.workers * args.requests
+
+        if args.batch:
+            reqs = [IDENTITY_REQ] * total
+            t0 = now_ms()
+            results = c.pool_batch(args.slot, reqs, 256)
+            t1 = now_ms()
+            for i, (resp, err) in enumerate(results):
+                if err is None and resp is not None and validate_identity(resp):
+                    success[0] += 1
+                else:
+                    failed[0] += 1
+                    print(f"[pooltest] batch item[{i}] err={err}",
+                          file=sys.stderr)
+        else:
+            slock = threading.Lock()
+
+            def worker(wid: int) -> None:
+                local_succ = 0
+                local_fail = 0
+                for i in range(args.requests):
+                    try:
+                        resp = c.pool_txrx(args.slot, IDENTITY_REQ, 256)
+                        if validate_identity(resp):
+                            local_succ += 1
+                        else:
+                            local_fail += 1
+                            print(f"[pooltest] worker={wid} req[{i}] invalid",
+                                  file=sys.stderr)
+                    except Exception as e:
+                        local_fail += 1
+                        print(f"[pooltest] worker={wid} req[{i}] err={e}",
+                              file=sys.stderr)
+                with slock:
+                    success[0] += local_succ
+                    failed[0]  += local_fail
+
+            threads = [threading.Thread(target=worker, args=(w,))
+                       for w in range(args.workers)]
+            t0 = now_ms()
+            for t in threads: t.start()
+            for t in threads: t.join()
+            t1 = now_ms()
+
         rate = total / ((t1 - t0) / 1000.0) if (t1 - t0) > 0 else 0
-        print(f"[pooltest] fanout {args.workers} workers × "
+        mode = "batch " if args.batch else "fanout"
+        print(f"[pooltest] {mode} {args.workers} workers × "
               f"{args.requests} req = {total} total  "
               f"dt={t1 - t0:.2f}ms  ({rate:.0f} req/s)  "
               f"success={success[0]} failed={failed[0]}")

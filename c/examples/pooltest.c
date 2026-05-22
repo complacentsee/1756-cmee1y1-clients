@@ -76,6 +76,7 @@ int main(int argc, char *argv[]) {
     int requests = 25;        /* per worker — total = workers * requests */
     int keepalive_ms = 10000;
     int keepalive_test = 0;
+    int batch = 0;            /* 1 = use bp_client_pool_batch (Phase 4) */
 
     static struct option opts[] = {
         {"slot",            required_argument, 0, 's'},
@@ -84,10 +85,11 @@ int main(int argc, char *argv[]) {
         {"requests",        required_argument, 0, 'n'},
         {"keepalive-ms",    required_argument, 0, 'k'},
         {"keepalive-test",  no_argument,       0, 'K'},
+        {"batch",           no_argument,       0, 'B'},
         {0,0,0,0}
     };
     int oc, idx;
-    while ((oc = getopt_long(argc, argv, "s:z:w:n:k:K", opts, &idx)) != -1) {
+    while ((oc = getopt_long(argc, argv, "s:z:w:n:k:KB", opts, &idx)) != -1) {
         switch (oc) {
         case 's': slot         = (int)strtol(optarg, NULL, 0); break;
         case 'z': pool_size    = (int)strtol(optarg, NULL, 0); break;
@@ -95,6 +97,7 @@ int main(int argc, char *argv[]) {
         case 'n': requests     = (int)strtol(optarg, NULL, 0); break;
         case 'k': keepalive_ms = (int)strtol(optarg, NULL, 0); break;
         case 'K': keepalive_test = 1; break;
+        case 'B': batch        = 1; break;
         }
     }
 
@@ -124,34 +127,63 @@ int main(int argc, char *argv[]) {
     }
     printf("[pooltest] pool_open  dt=%.2fms\n", t_open1 - t_open0);
 
-    struct worker_args *args = calloc((size_t)workers, sizeof(*args));
-    pthread_t *threads = calloc((size_t)workers, sizeof(*threads));
-    for (int w = 0; w < workers; w++) {
-        args[w].cl        = cl;
-        args[w].slot      = slot;
-        args[w].requests  = requests;
-        args[w].worker_id = w;
-        atomic_store(&args[w].success, 0);
-        atomic_store(&args[w].failed,  0);
-    }
-
-    double t0 = now_ms();
-    for (int w = 0; w < workers; w++) {
-        pthread_create(&threads[w], NULL, worker_thread, &args[w]);
-    }
-    for (int w = 0; w < workers; w++) {
-        pthread_join(threads[w], NULL);
-    }
-    double t1 = now_ms();
-
-    int total_success = 0, total_failed = 0;
-    for (int w = 0; w < workers; w++) {
-        total_success += atomic_load(&args[w].success);
-        total_failed  += atomic_load(&args[w].failed);
-    }
     int total = workers * requests;
-    printf("[pooltest] fanout %d workers × %d req = %d total  dt=%.2fms  "
+    int total_success = 0, total_failed = 0;
+    double t0, t1;
+
+    if (batch) {
+        /* Phase 4 path: one bp_client_pool_batch call. */
+        bp_batch_item_t *items = calloc((size_t)total, sizeof(*items));
+        uint8_t *resp_buf = calloc((size_t)total, 256);
+        for (int i = 0; i < total; i++) {
+            items[i].req           = IDENTITY_REQ;
+            items[i].req_size      = sizeof(IDENTITY_REQ);
+            items[i].resp          = resp_buf + (size_t)i * 256;
+            items[i].resp_capacity = 256;
+        }
+        t0 = now_ms();
+        (void)bp_client_pool_batch(cl, (uint8_t)slot, items, (size_t)total);
+        t1 = now_ms();
+        for (int i = 0; i < total; i++) {
+            if (items[i].rc == BP_OK &&
+                validate_identity_reply(items[i].resp, items[i].resp_len)) {
+                total_success++;
+            } else {
+                total_failed++;
+                fprintf(stderr, "[pooltest] batch item[%d] rc=%d (%s)\n",
+                        i, items[i].rc, bp_strerror(items[i].rc));
+            }
+        }
+        free(items); free(resp_buf);
+    } else {
+        /* Original fanout via M worker pthreads calling pool_txrx. */
+        struct worker_args *args = calloc((size_t)workers, sizeof(*args));
+        pthread_t *threads = calloc((size_t)workers, sizeof(*threads));
+        for (int w = 0; w < workers; w++) {
+            args[w].cl        = cl;
+            args[w].slot      = slot;
+            args[w].requests  = requests;
+            args[w].worker_id = w;
+            atomic_store(&args[w].success, 0);
+            atomic_store(&args[w].failed,  0);
+        }
+        t0 = now_ms();
+        for (int w = 0; w < workers; w++) {
+            pthread_create(&threads[w], NULL, worker_thread, &args[w]);
+        }
+        for (int w = 0; w < workers; w++) {
+            pthread_join(threads[w], NULL);
+        }
+        t1 = now_ms();
+        for (int w = 0; w < workers; w++) {
+            total_success += atomic_load(&args[w].success);
+            total_failed  += atomic_load(&args[w].failed);
+        }
+        free(args); free(threads);
+    }
+    printf("[pooltest] %s %d workers × %d req = %d total  dt=%.2fms  "
            "(%.0f req/s)  success=%d failed=%d\n",
+           batch ? "batch " : "fanout",
            workers, requests, total, t1 - t0,
            (double)total / ((t1 - t0) / 1000.0),
            total_success, total_failed);
@@ -169,7 +201,6 @@ int main(int argc, char *argv[]) {
     int pass = (total_success == total) && (crc == BP_OK);
     printf("[pooltest] %s\n", pass ? "PASS" : "FAIL");
 
-    free(args); free(threads);
     bp_client_close(cl);
     return pass ? 0 : 1;
 }

@@ -35,6 +35,7 @@ func main() {
 	requests := flag.Int("requests", 25, "requests per worker")
 	keepaliveMs := flag.Int("keepalive-ms", 10000, "keepalive interval (ms); 0 disables")
 	keepaliveTest := flag.Bool("keepalive-test", false, "sleep 30s after fanout so keepalive can fire")
+	batch := flag.Bool("batch", false, "use PoolBatch (Phase 4) instead of manual goroutine fanout")
 	flag.Parse()
 
 	client, err := ocxbp.Open()
@@ -62,30 +63,54 @@ func main() {
 	fmt.Printf("[pooltest] pool_open  dt=%.2fms\n", tOpen1-tOpen0)
 
 	var success, failed atomic.Int64
-	var wg sync.WaitGroup
-	t0 := nowMs()
-	for w := 0; w < *workers; w++ {
-		wg.Add(1)
-		go func(wid int) {
-			defer wg.Done()
-			resp := make([]byte, 256)
-			for i := 0; i < *requests; i++ {
-				got, err := client.PoolTxRx(uint8(*slot), identityReq, resp, uint16(len(resp)))
-				if err == nil && validateIdentity(resp[:got]) {
-					success.Add(1)
-				} else {
-					failed.Add(1)
-					fmt.Fprintf(os.Stderr, "[pooltest] worker=%d req[%d] err=%v\n", wid, i, err)
-				}
-			}
-		}(w)
-	}
-	wg.Wait()
-	t1 := nowMs()
-
 	total := int64(*workers) * int64(*requests)
-	fmt.Printf("[pooltest] fanout %d workers × %d req = %d total  dt=%.2fms  (%.0f req/s)  success=%d failed=%d\n",
-		*workers, *requests, total, t1-t0, float64(total)/((t1-t0)/1000.0),
+	var t0, t1 float64
+
+	if *batch {
+		items := make([]ocxbp.BatchItem, total)
+		for i := range items {
+			items[i].Req = identityReq
+		}
+		t0 = nowMs()
+		_ = client.PoolBatch(uint8(*slot), items, 256)
+		t1 = nowMs()
+		for i := range items {
+			if items[i].Err == nil && validateIdentity(items[i].Resp) {
+				success.Add(1)
+			} else {
+				failed.Add(1)
+				fmt.Fprintf(os.Stderr, "[pooltest] batch item[%d] err=%v\n", i, items[i].Err)
+			}
+		}
+	} else {
+		var wg sync.WaitGroup
+		t0 = nowMs()
+		for w := 0; w < *workers; w++ {
+			wg.Add(1)
+			go func(wid int) {
+				defer wg.Done()
+				resp := make([]byte, 256)
+				for i := 0; i < *requests; i++ {
+					got, err := client.PoolTxRx(uint8(*slot), identityReq, resp, uint16(len(resp)))
+					if err == nil && validateIdentity(resp[:got]) {
+						success.Add(1)
+					} else {
+						failed.Add(1)
+						fmt.Fprintf(os.Stderr, "[pooltest] worker=%d req[%d] err=%v\n", wid, i, err)
+					}
+				}
+			}(w)
+		}
+		wg.Wait()
+		t1 = nowMs()
+	}
+
+	mode := "fanout"
+	if *batch {
+		mode = "batch "
+	}
+	fmt.Printf("[pooltest] %s %d workers × %d req = %d total  dt=%.2fms  (%.0f req/s)  success=%d failed=%d\n",
+		mode, *workers, *requests, total, t1-t0, float64(total)/((t1-t0)/1000.0),
 		success.Load(), failed.Load())
 
 	if *keepaliveTest {

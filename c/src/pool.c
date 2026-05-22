@@ -312,6 +312,101 @@ out:
     return NULL;
 }
 
+/* ────────── bp_client_pool_batch ────────────────────────────── */
+
+struct batch_ctx {
+    bp_client_t      *cl;
+    uint8_t           slot;
+    bp_batch_item_t  *items;
+    size_t            count;
+    pthread_mutex_t   idx_mu;     /* protects next_idx */
+    size_t            next_idx;
+};
+
+static void *pool_batch_worker(void *arg) {
+    struct batch_ctx *ctx = (struct batch_ctx *)arg;
+    while (1) {
+        pthread_mutex_lock(&ctx->idx_mu);
+        size_t i = ctx->next_idx++;
+        pthread_mutex_unlock(&ctx->idx_mu);
+        if (i >= ctx->count) return NULL;
+
+        bp_batch_item_t *it = &ctx->items[i];
+        it->resp_len = 0;
+        it->rc = bp_client_pool_txrx(ctx->cl, ctx->slot,
+                                       it->req, it->req_size,
+                                       it->resp, it->resp_capacity,
+                                       &it->resp_len);
+    }
+}
+
+int bp_client_pool_batch(bp_client_t *cl, uint8_t slot,
+                          bp_batch_item_t *items, size_t count) {
+    if (!cl || !items) return BP_ERR_NULL_ARG;
+    if (slot > BP_MSG_MAX_SLOT) return BP_ERR_SLOT_TOO_LARGE;
+    if (count == 0) return BP_OK;
+
+    /* Read pool size for worker-thread count.  Pool may close
+     * concurrently — handle that via pool_txrx's NOT_OPEN return. */
+    pthread_mutex_lock(&cl->pools_mu);
+    struct bp_pool *pool = &cl->pools[slot];
+    if (!pool->initialized) {
+        pthread_mutex_unlock(&cl->pools_mu);
+        return BP_ERR_NOT_OPEN;
+    }
+    size_t worker_count = pool->size;
+    pthread_mutex_unlock(&cl->pools_mu);
+    if (worker_count > count) worker_count = count;
+
+    struct batch_ctx ctx = {
+        .cl    = cl,
+        .slot  = slot,
+        .items = items,
+        .count = count,
+        .next_idx = 0,
+    };
+    pthread_mutex_init(&ctx.idx_mu, NULL);
+
+    pthread_t *threads = calloc(worker_count, sizeof(*threads));
+    if (!threads) {
+        pthread_mutex_destroy(&ctx.idx_mu);
+        return BP_ERR_GENERIC;
+    }
+    for (size_t i = 0; i < worker_count; i++) {
+        int rc = pthread_create(&threads[i], NULL, pool_batch_worker, &ctx);
+        if (rc != 0) {
+            /* Mark remaining items as failed so caller doesn't see
+             * uninitialized rc, then join workers we managed to
+             * spawn and return. */
+            for (size_t j = i; j < worker_count; j++) threads[j] = 0;
+            fprintf(stderr, "[bp_client_pool_batch] pthread_create rc=%d "
+                            "(spawned %zu/%zu workers)\n", rc, i, worker_count);
+            break;
+        }
+    }
+    for (size_t i = 0; i < worker_count; i++) {
+        if (threads[i] != 0) pthread_join(threads[i], NULL);
+    }
+    free(threads);
+
+    /* Items past next_idx (if we failed to spawn all workers) — mark
+     * as generic-rc so caller can see they didn't run. */
+    pthread_mutex_lock(&ctx.idx_mu);
+    size_t consumed = ctx.next_idx > count ? count : ctx.next_idx;
+    pthread_mutex_unlock(&ctx.idx_mu);
+    for (size_t i = consumed; i < count; i++) {
+        items[i].rc = BP_ERR_GENERIC;
+        items[i].resp_len = 0;
+    }
+    pthread_mutex_destroy(&ctx.idx_mu);
+
+    int overall = BP_OK;
+    for (size_t i = 0; i < count; i++) {
+        if (items[i].rc != BP_OK) { overall = BP_ERR_GENERIC; break; }
+    }
+    return overall;
+}
+
 /* ────────── bp_client_pool_close ────────────────────────────── */
 
 int bp_client_pool_close(bp_client_t *cl, uint8_t slot) {

@@ -450,6 +450,39 @@ int bp_client_pool_txrx(bp_client_t *client, uint8_t slot,
  *   Idempotent: closing a non-existent pool returns BP_OK. */
 int bp_client_pool_close(bp_client_t *client, uint8_t slot);
 
+/* bp_batch_item_t — one request/response slot in a pool_batch call.
+ *
+ * Caller fills (req, req_size, resp, resp_capacity).  On return:
+ *   resp_len  — actual reply byte count (0 on failure)
+ *   rc        — BP_OK on success, or whatever bp_client_pool_txrx
+ *               would have returned for this item.
+ *
+ * Items are dispatched concurrently across pool connections; ordering
+ * of completion is not guaranteed but results land in their assigned
+ * indices (so iteration after the batch yields the original order). */
+typedef struct {
+    const uint8_t *req;
+    uint16_t       req_size;
+    uint8_t       *resp;          /* IN: caller-allocated */
+    uint16_t       resp_capacity; /* IN: capacity of resp */
+    uint16_t       resp_len;      /* OUT: bytes written */
+    int            rc;            /* OUT: per-item rc */
+} bp_batch_item_t;
+
+/* bp_client_pool_batch
+ *   Concurrently dispatches `count` requests through the pool for
+ *   `slot`, blocking until all complete.  Internally spawns
+ *   min(pool.size, count) worker pthreads that pull items from a
+ *   shared index counter and call bp_client_pool_txrx for each.
+ *
+ *   Returns BP_OK if every item completed with rc=BP_OK.  Returns
+ *   BP_ERR_NOT_OPEN if no pool exists for this slot.  Returns
+ *   BP_ERR_GENERIC if at least one item failed (caller inspects each
+ *   item's rc to find which).  Worker thread creation failures
+ *   return BP_ERR_GENERIC immediately. */
+int bp_client_pool_batch(bp_client_t *client, uint8_t slot,
+                          bp_batch_item_t *items, size_t count);
+
 /* ============================================================
  * Multi-hop routes — Unconnected_Send (CIP service 0x52)
  *

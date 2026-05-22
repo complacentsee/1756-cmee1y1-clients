@@ -187,6 +187,79 @@ func (c *Client) PoolTxRx(slot uint8, req []byte, resp []byte, respCap uint16) (
 	return got, err
 }
 
+// BatchItem is one request/response slot in a PoolBatch call.
+// Caller fills Req; the pool fills Resp + Err on completion.  Order
+// of dispatch is unspecified but each result lands back in its
+// original slot.
+type BatchItem struct {
+	Req  []byte
+	Resp []byte // populated on success; len() == response size
+	Err  error
+}
+
+// PoolBatch concurrently dispatches len(items) requests through the
+// pool for slot, blocking until all complete.  Spawns
+// min(pool.size, len(items)) worker goroutines.  Returns nil if every
+// item succeeded; otherwise returns an error wrapping the first
+// non-nil item Err (caller can iterate items to find all failures).
+//
+// Each item's Resp buffer is allocated by PoolBatch with capacity
+// respCap.  Pass a respCap large enough for the biggest expected
+// reply.
+func (c *Client) PoolBatch(slot uint8, items []BatchItem, respCap uint16) error {
+	if c == nil || items == nil {
+		return ErrNullArg
+	}
+	if slot > MsgMaxSlot {
+		return ErrSlotTooLarge
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	c.poolsMu.Lock()
+	p := c.pools[slot]
+	c.poolsMu.Unlock()
+	if p == nil || !p.initialized.Load() {
+		return ErrNotOpen
+	}
+
+	workerCount := int(p.size)
+	if workerCount > len(items) {
+		workerCount = len(items)
+	}
+
+	var idx atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for w := 0; w < workerCount; w++ {
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(idx.Add(1)) - 1
+				if i >= len(items) {
+					return
+				}
+				resp := make([]byte, respCap)
+				got, err := c.PoolTxRx(slot, items[i].Req, resp, respCap)
+				if err == nil {
+					items[i].Resp = resp[:got]
+				} else {
+					items[i].Resp = nil
+				}
+				items[i].Err = err
+			}
+		}()
+	}
+	wg.Wait()
+
+	for i := range items {
+		if items[i].Err != nil {
+			return fmt.Errorf("ocxbp: PoolBatch: item %d failed: %w", i, items[i].Err)
+		}
+	}
+	return nil
+}
+
 // PoolClose stops the keepalive goroutine, sends Forward_Close on
 // every pool entry, and frees the pool state.  In-flight calls
 // complete first; subsequent PoolTxRx on this slot returns ErrNotOpen.
