@@ -389,3 +389,197 @@ class TagDB:
 
     def write_bool(self, tag: str, v: bool) -> None:
         self._scalar_rw(tag, P.TYPE_BOOL, 1, P.ACTION_WRITE, b"\x01" if v else b"\x00")
+
+    # ============================================================
+    # Array helpers
+    #
+    # Each Read/Write pair dispatches one batched-of-one Access call
+    # with the appropriate type code + elem_count.  Read returns a
+    # Python list; write takes a list/sequence.
+    # ============================================================
+    def _array_rw(self, tag: str, data_type: int, elem_byte_size: int,
+                  action: int, count: int, data: bytes) -> bytes:
+        if count <= 0 or count > 0xFFFF:
+            raise BpParamRange("array count must be 1..65535")
+        r = TagRequest(
+            tag_name=tag, data_type=data_type,
+            elem_byte_size=elem_byte_size, action=action,
+            elem_count=count, data=data,
+        )
+        self.access([r])
+        if r.result != 0:
+            raise BpGeneric(f"CIP general status {r.result:#x} on tag {tag!r}")
+        return r.data if action == P.ACTION_READ else b""
+
+    def _unpack_array(self, raw: bytes, count: int, fmt: str, elem_size: int) -> list:
+        return list(struct.unpack(f"<{count}{fmt}", raw[:count * elem_size]))
+
+    def _pack_array(self, vals, fmt: str) -> bytes:
+        return struct.pack(f"<{len(vals)}{fmt}", *vals)
+
+    # Signed integer arrays
+    def read_sint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_SINT, 1, P.ACTION_READ,
+                             count, b"\x00" * count)
+        return self._unpack_array(raw, count, "b", 1)
+
+    def write_sint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_SINT, 1, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "b"))
+
+    def read_int_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_INT, 2, P.ACTION_READ,
+                             count, b"\x00" * (count * 2))
+        return self._unpack_array(raw, count, "h", 2)
+
+    def write_int_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_INT, 2, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "h"))
+
+    def read_dint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_DINT, 4, P.ACTION_READ,
+                             count, b"\x00" * (count * 4))
+        return self._unpack_array(raw, count, "i", 4)
+
+    def write_dint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_DINT, 4, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "i"))
+
+    def read_lint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_LINT, 8, P.ACTION_READ,
+                             count, b"\x00" * (count * 8))
+        return self._unpack_array(raw, count, "q", 8)
+
+    def write_lint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_LINT, 8, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "q"))
+
+    # Unsigned integer arrays
+    def read_usint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_USINT, 1, P.ACTION_READ,
+                             count, b"\x00" * count)
+        return list(raw[:count])
+
+    def write_usint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_USINT, 1, P.ACTION_WRITE,
+                       len(vals), bytes(vals))
+
+    def read_uint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_UINT, 2, P.ACTION_READ,
+                             count, b"\x00" * (count * 2))
+        return self._unpack_array(raw, count, "H", 2)
+
+    def write_uint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_UINT, 2, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "H"))
+
+    def read_udint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_UDINT, 4, P.ACTION_READ,
+                             count, b"\x00" * (count * 4))
+        return self._unpack_array(raw, count, "I", 4)
+
+    def write_udint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_UDINT, 4, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "I"))
+
+    def read_ulint_array(self, tag: str, count: int) -> list[int]:
+        raw = self._array_rw(tag, P.TYPE_ULINT, 8, P.ACTION_READ,
+                             count, b"\x00" * (count * 8))
+        return self._unpack_array(raw, count, "Q", 8)
+
+    def write_ulint_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_ULINT, 8, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "Q"))
+
+    # Float arrays
+    def read_real_array(self, tag: str, count: int) -> list[float]:
+        raw = self._array_rw(tag, P.TYPE_REAL, 4, P.ACTION_READ,
+                             count, b"\x00" * (count * 4))
+        return self._unpack_array(raw, count, "f", 4)
+
+    def write_real_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_REAL, 4, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "f"))
+
+    def read_lreal_array(self, tag: str, count: int) -> list[float]:
+        raw = self._array_rw(tag, P.TYPE_LREAL, 8, P.ACTION_READ,
+                             count, b"\x00" * (count * 8))
+        return self._unpack_array(raw, count, "d", 8)
+
+    def write_lreal_array(self, tag: str, vals) -> None:
+        self._array_rw(tag, P.TYPE_LREAL, 8, P.ACTION_WRITE,
+                       len(vals), self._pack_array(vals, "d"))
+
+    # ============================================================
+    # BOOL[] (Logix BIT_ARRAY 0xD3)
+    #
+    # Logix packs BOOL[N] as ceil(N/32) DWORDs on the wire.  These
+    # helpers convert between that wire form and a Python list[bool].
+    #
+    # Write note: if count isn't a multiple of 32, trailing bits in
+    # the last DWORD are written as zeros.  Read-modify-write if you
+    # need to preserve unrelated bits.
+    # ============================================================
+    @staticmethod
+    def _dwords_for_bits(count: int) -> int:
+        return (count + 31) // 32
+
+    def read_bool_array(self, tag: str, count: int) -> list[bool]:
+        """Read `count` BOOL[] elements as a list[bool]."""
+        if count <= 0 or count > 0xFFFF:
+            raise BpParamRange("array count must be 1..65535")
+        n_dwords = self._dwords_for_bits(count)
+        raw = self._array_rw(tag, P.TYPE_BIT_ARRAY, 4, P.ACTION_READ,
+                             n_dwords, b"\x00" * (n_dwords * 4))
+        dwords = struct.unpack(f"<{n_dwords}I", raw[:n_dwords * 4])
+        return [bool((dwords[i // 32] >> (i & 31)) & 1) for i in range(count)]
+
+    def write_bool_array(self, tag: str, vals) -> None:
+        """Write a list[bool] / sequence as Logix BIT_ARRAY DWORDs."""
+        count = len(vals)
+        if count == 0 or count > 0xFFFF:
+            raise BpParamRange("array count must be 1..65535")
+        n_dwords = self._dwords_for_bits(count)
+        dwords = [0] * n_dwords
+        for i, v in enumerate(vals):
+            if v:
+                dwords[i // 32] |= 1 << (i & 31)
+        packed = struct.pack(f"<{n_dwords}I", *dwords)
+        self._array_rw(tag, P.TYPE_BIT_ARRAY, 4, P.ACTION_WRITE,
+                       n_dwords, packed)
+
+    # ============================================================
+    # STRING (AB Logix STRING family)
+    #
+    # Works with the default STRING (LEN:DINT + DATA:SINT[82]),
+    # STRING_32, STRING_512, and any LEN+DATA-shaped UDT.  Two
+    # IPC round-trips internally (.LEN then .DATA).
+    # ============================================================
+    def read_string(self, tag: str) -> str:
+        """Read tag.LEN (DINT) then tag.DATA (SINT[LEN])."""
+        if not tag or len(tag) > 250:
+            raise BpParamRange("tag too long")
+        len_field = self.read_dint(tag + ".LEN")
+        if len_field <= 0:
+            return ""
+        n = min(len_field, 0xFFFF)
+        data = self.read_sint_array(tag + ".DATA", n)
+        return bytes(b & 0xFF for b in data).decode("latin-1")
+
+    def write_string(self, tag: str, value: str) -> None:
+        """Write value's bytes to tag.DATA then update tag.LEN.
+
+        If the destination's DATA[] capacity is smaller than
+        len(value), the engine returns a CIP General Status error
+        (typically 0x13 "Not enough data" or 0x15 "Too much data"),
+        surfaced as BpGeneric.
+        """
+        if not tag or len(tag) > 250:
+            raise BpParamRange("tag too long")
+        encoded = value.encode("latin-1")
+        if len(encoded) > 0xFFFF:
+            raise BpParamRange("value too long")
+        if encoded:
+            data = [b - 256 if b >= 128 else b for b in encoded]
+            self.write_sint_array(tag + ".DATA", data)
+        self.write_dint(tag + ".LEN", len(encoded))

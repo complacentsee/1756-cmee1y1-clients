@@ -166,3 +166,66 @@ def test_err_code_maps_exceptions_to_rc():
     assert bpclient.err_code(None) == 0
     assert bpclient.err_code(bpclient.BpParamRange("x")) == bpclient.errors.BP_ERR_PARAM_RANGE
     assert bpclient.err_code(bpclient.BpEngine(7)) == 7
+
+
+def test_dint_array_roundtrip_through_fake():
+    """ReadDINTArray must request count elements at the corrected
+    offsets and unpack them in little-endian."""
+    c, fake = _make_client_with_fake()
+    from bpclient import TagDB
+
+    db = TagDB(client=c, handle=0xAA, path="P:1,S:2")
+
+    def load(slot):
+        # 4 DINTs at the data area for a single 4-element request
+        # data_area_start = 0x2A0 (count=1 so (1-1)*stride=0)
+        data_off = 0x2A0
+        vals = [0x11111111, 0x22222222, 0x33333333, 0x44444444]
+        struct.pack_into("<4I", slot, data_off, *vals)
+        struct.pack_into("<I", slot,
+                         P.TAGDATA_REQ0_START + P.REQ_RESULT_OFF, 0)
+
+    fake.response_loader = load
+    out = db.read_dint_array("ArrayTag", 4)
+    assert out == [0x11111111, 0x22222222, 0x33333333, 0x44444444]
+
+    # Verify the request descriptor used the right type + count
+    req_start = P.TAGDATA_REQ0_START
+    assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_DATATYPE_OFF)[0] == P.TYPE_DINT
+    assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_ELEM_BYTE_SIZE_OFF)[0] == 4
+    assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_ELEM_COUNT_OFF)[0] == 4
+
+
+def test_bool_array_packs_to_dwords():
+    """BOOL[] writes must produce ceil(N/32) DWORDs with the bits
+    in the documented order (bit i of DWORD i/32 = vals[i])."""
+    c, fake = _make_client_with_fake()
+    from bpclient import TagDB
+
+    db = TagDB(client=c, handle=0xAA, path="P:1,S:2")
+
+    def load(slot):
+        struct.pack_into("<I", slot,
+                         P.TAGDATA_REQ0_START + P.REQ_RESULT_OFF, 0)
+
+    fake.response_loader = load
+
+    # Pattern: bits 0, 3, 7, 31, 32, 33 set (spans two DWORDs).
+    vals = [False] * 34
+    for i in (0, 3, 7, 31, 32, 33):
+        vals[i] = True
+    db.write_bool_array("BitTag", vals)
+
+    # Two DWORDs at the data area.
+    data_off = 0x2A0
+    dw0, dw1 = struct.unpack_from("<II", fake.slot, data_off)
+    # DWORD 0: bits 0, 3, 7, 31
+    assert dw0 == (1 << 0) | (1 << 3) | (1 << 7) | (1 << 31)
+    # DWORD 1: bits 32, 33 -> within DWORD 1: bit 0, bit 1
+    assert dw1 == (1 << 0) | (1 << 1)
+
+    # Wire type + count
+    req_start = P.TAGDATA_REQ0_START
+    assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_DATATYPE_OFF)[0] == P.TYPE_BIT_ARRAY
+    assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_ELEM_BYTE_SIZE_OFF)[0] == 4
+    assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_ELEM_COUNT_OFF)[0] == 2  # ceil(34/32)
