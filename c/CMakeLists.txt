@@ -21,6 +21,7 @@ set(LIB_SOURCES
     src/access.c
     src/errors.c
     src/message.c
+    src/identity.c
 )
 
 # Shared library
@@ -29,7 +30,7 @@ target_link_libraries(bpclient PRIVATE pthread rt)
 set_target_properties(bpclient PROPERTIES
     PUBLIC_HEADER include/bpclient.h
     SOVERSION 0
-    VERSION 0.3.0
+    VERSION 0.4.0
 )
 
 # Static library (same sources, different target)
@@ -81,6 +82,20 @@ target_link_libraries(msgprobe PRIVATE bpclient pthread rt)
 add_executable(identity examples/identity.c)
 target_link_libraries(identity PRIVATE bpclient pthread rt)
 
+# Example: pathprobe — call OCXcip_ParsePath and dump the canonical
+# encoded EPATH bytes (diagnostic / verification tool)
+add_executable(pathprobe examples/pathprobe.c)
+target_link_libraries(pathprobe PRIVATE bpclient pthread rt)
+
+# Example: actnodes — dump the OCXcip_GetActiveNodeTable bitmap
+add_executable(actnodes examples/actnodes.c)
+target_link_libraries(actnodes PRIVATE bpclient pthread rt)
+
+# Example: msgprobe_routed — MessageSend with a pre-opened TagDb handle
+# (diagnostic: tests whether routing is inherited from CreateTagDbHandle)
+add_executable(msgprobe_routed examples/msgprobe_routed.c)
+target_link_libraries(msgprobe_routed PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -102,6 +117,9 @@ install(TARGETS
             symprobe
             testtagver
             msgprobe
+            msgprobe_routed
             identity
+            pathprobe
+            actnodes
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

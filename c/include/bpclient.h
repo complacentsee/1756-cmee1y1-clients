@@ -94,22 +94,28 @@ int  bp_client_open_session(bp_client_t *client, uint32_t *out_handle);
 /* ============================================================
  * Explicit (UCMM) messaging — bp_client_message_send
  *
- * One unconnected CIP request, raw path + service.  The OEM wrapper
- * permits service codes < 0x14 only and on the cm1756 only certain
- * service/class combinations actually round-trip cleanly to a
- * remote device — most notably **Get_Attribute_All (0x01)**.
- * Get_Attribute_Single (0x0E) is rejected with rc=3 across all
- * tested attribute paths; the OEM exposes dedicated wrappers
- * (OCXcip_GetIdObject, OCXcip_GetSwitchPosition, etc.) for those
- * use cases rather than going through MessageSend.  See
- * docs/protocol.md for the wire format and exploration notes.
+ * One unconnected CIP request to the wrapper's *default* backplane
+ * target — typically the first PLC in the chassis, NOT a slot of
+ * your choosing.  Port-segment routing inside encoded_path is
+ * ignored by the OEM library; we verified empirically that paths
+ * with `{0x01, 0x01, ...}` and `{0x01, 0x02, ...}` reach the same
+ * device regardless of which slot you intend to address.
  *
- * `encoded_path` is the raw CIP EPATH — caller-built.  For a route
- * to slot 2 + class 1 instance 1 use:
- *   uint8_t epath[] = {0x01, 0x02, 0x20, 0x01, 0x24, 0x01};
- * `class_or_misc` is informational — the engine validates it but
- * does not reshape the path from it; passing the class ID in this
- * field is the OEM convention.
+ * **For per-slot device queries use bp_client_get_device_id()** —
+ * that helper takes a textual path ("P:1,S:2"), delegates to the
+ * OEM's OCXcip_GetDeviceIdObject, and DOES route correctly.
+ *
+ * The OEM wrapper accepts service codes < 0x14 only.  Verified
+ * working services on cm1756 + L73:
+ *   - 0x01 Get_Attribute_All — returns full CIP response framed as
+ *     [service_reply | 0x80, reserved, general_status, ext_size, ...]
+ *   - Most other service codes return CIP General Status 0x03 / 0x04
+ *     ("Invalid parameter" / "Path segment error") because the device
+ *     receives a request shaped for Get_Attribute_All semantics.
+ *
+ * `class_or_misc` is informational — engine validates it but it does
+ * not affect the on-wire request.  See docs/protocol.md for the
+ * full wire-format exploration notes.
  * ============================================================ */
 
 typedef struct {
@@ -133,6 +139,48 @@ typedef struct {
  *   for the given service/class combination).
  */
 int bp_client_message_send(bp_client_t *client, bp_message_t *msg);
+
+/* ============================================================
+ * CIP Identity / device queries
+ * ============================================================ */
+
+/* CIP Identity Object (class 0x01).  48 bytes / 6 qwords on the wire. */
+typedef struct {
+    uint16_t vendor_id;
+    uint16_t device_type;
+    uint16_t product_code;
+    uint8_t  major_rev;
+    uint8_t  minor_rev;
+    uint16_t status;
+    uint32_t serial_number;
+    uint8_t  product_name[32];   /* SHORT_STRING padded with NULs */
+} bp_id_object_t;
+
+/* bp_client_get_id_local
+ *   Returns the LOCAL cm1756 module's Identity object.  Wraps
+ *   OCXcip_GetIdObject — no path, no class word, just dispatches
+ *   and reads back the 48-byte struct. */
+int bp_client_get_id_local(bp_client_t *client, bp_id_object_t *out);
+
+/* bp_client_get_device_id
+ *   Returns the Identity of the device addressed by `text_path`
+ *   (OldI format, e.g. "P:1,S:2").  Wraps OCXcip_GetDeviceIdObject;
+ *   the OEM library does the path parsing internally, so this is
+ *   the safest way to address a remote device when you're not sure
+ *   about CIP EPATH encoding edge cases.
+ *   `instance` is normally 1 (Identity instance 1). */
+int bp_client_get_device_id(bp_client_t *client,
+                             const char *text_path,
+                             uint16_t instance,
+                             bp_id_object_t *out);
+
+/* bp_client_get_active_nodes
+ *   Wraps OCXcip_GetActiveNodeTable: returns a 64-bit bitmap of
+ *   nodes the wrapper sees as responsive.  bit N in (mask_low |
+ *   (mask_high << 32)) corresponds to node N. */
+int bp_client_get_active_nodes(bp_client_t *client,
+                                uint32_t *out_mask_low,
+                                uint32_t *out_mask_high);
 
 /* ============================================================
  * Tag database

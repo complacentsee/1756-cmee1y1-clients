@@ -306,21 +306,34 @@ RESPONSE PAYLOAD:
   slot + 0x50     int32    errorcode           normal slot semantics
 ```
 
-**`encoded_path` is caller-built raw CIP EPATH.**  Standard segments:
+**`encoded_path` is caller-built raw CIP EPATH — but the wrapper
+appears to use it for OBJECT addressing only, not for backplane
+routing.**  Empirical observation on cm1756: hand-built paths with
+port-segment routing (e.g. `0x01, 0x01, ...` vs `0x01, 0x02, ...`)
+return the SAME default-target Identity, not the per-slot device.
+The OEM library appears to maintain target routing in session state
+(set via `OCXcip_ParsePath` or similar), and the bytes you pass via
+`encoded_path` here are interpreted as the object EPATH only.
+
+For per-slot device queries use `bp_client_get_device_id(text_path,
+instance, ...)` — that helper wraps `OCXcip_GetDeviceIdObject`
+which takes a textual path like `"P:1,S:2"` and delegates path
+parsing + routing to the OEM library.
+
+Standard logical segments still apply to `encoded_path`:
 
 | Segment | Wire | Purpose |
 |---|---|---|
-| Port (8-bit link) | `0x_p, link` | route via port _p_ to link addr |
 | Logical 8-bit Class | `0x20, classID` | select class |
 | Logical 16-bit Class | `0x21, 0x00, lo, hi` | select class (>= 256) |
 | Logical 8-bit Instance | `0x24, instID` | select instance |
 | Logical 16-bit Instance | `0x25, 0x00, lo, hi` | select instance (>= 256) |
 | Logical 8-bit Attribute | `0x30, attrID` | select attribute |
 
-Example — Identity Get_Attribute_All on backplane slot 2:
+Example — Identity Get_Attribute_All on default target (routing set
+elsewhere, e.g. via a prior tagdb open):
 ```c
-uint8_t epath[] = { 0x01, 0x02,        /* port 1 (backplane), slot 2 */
-                    0x20, 0x01,        /* class 1 (Identity) */
+uint8_t epath[] = { 0x20, 0x01,        /* class 1 (Identity) */
                     0x24, 0x01 };      /* instance 1 */
 bp_message_t msg = {
     .encoded_path = epath, .path_size = sizeof(epath),
