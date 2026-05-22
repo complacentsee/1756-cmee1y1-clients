@@ -27,6 +27,7 @@ set(LIB_SOURCES
     src/pool.c
     src/route.c
     src/tagcache.c
+    src/multitag.c
 )
 
 # Shared library
@@ -131,6 +132,11 @@ target_link_libraries(routedident PRIVATE bpclient pthread rt)
 add_executable(symcache examples/symcache.c)
 target_link_libraries(symcache PRIVATE bpclient pthread rt)
 
+# Example: multitagtest — v0.9.0 read_tags batch validator
+# (decodes mixed scalar types in one AccessTagData batch).
+add_executable(multitagtest examples/multitagtest.c)
+target_link_libraries(multitagtest PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -162,5 +168,6 @@ install(TARGETS
             pooltest
             routedident
             symcache
+            multitagtest
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

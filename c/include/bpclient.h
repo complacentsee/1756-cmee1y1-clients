@@ -647,6 +647,80 @@ int  bp_tagdb_lookup_symbol(bp_tagdb_t *db, const char *name,
  *   remain in the cache. */
 int  bp_tagdb_preload_symbols(bp_tagdb_t *db);
 
+/* ============================================================
+ * Multi-tag read/write — bp_tagdb_read_tags / bp_tagdb_write_tags
+ *
+ * v0.9.0+ ergonomic layer over bp_tagdb_access.  Resolves each name
+ * via the per-client symbol cache, batches all requests into one
+ * AccessTagData round-trip, and decodes per-tag results into a
+ * variant struct.  Scalars only in v0.9.0 — arrays and UDTs (incl.
+ * the STRING family) return BP_ERR_PARAM_RANGE.  Mixed STRINGs in
+ * a batch would require an extra round-trip for .LEN/.DATA splitting;
+ * deferred until a real workload needs it.
+ *
+ * Whole-batch failure semantics:  if any per-tag CIP General Status
+ * comes back non-zero, the call returns BP_ERR_GENERIC.  The caller
+ * inspects each bp_value_t.cip_status to find which tag(s) failed —
+ * other tags still hold their decoded values.
+ * ============================================================ */
+
+typedef enum {
+    BP_VAL_NONE   = 0,         /* not populated (initial state or error) */
+    BP_VAL_BOOL,
+    BP_VAL_SINT,  BP_VAL_INT,  BP_VAL_DINT,  BP_VAL_LINT,
+    BP_VAL_USINT, BP_VAL_UINT, BP_VAL_UDINT, BP_VAL_ULINT,
+    BP_VAL_REAL,  BP_VAL_LREAL,
+    BP_VAL_STRING,             /* string.data is malloc'd by the SDK */
+} bp_value_kind_t;
+
+typedef struct {
+    bp_value_kind_t kind;
+    uint32_t        cip_status;     /* OUT: CIP General Status; 0 = ok */
+    union {
+        int8_t   sint;
+        int16_t  int_;
+        int32_t  dint;
+        int64_t  lint;
+        uint8_t  usint;
+        uint16_t uint;
+        uint32_t udint;
+        uint64_t ulint;
+        float    real;
+        double   lreal;
+        int      boolean;
+        struct { char *data; size_t len; } string;
+    } v;
+} bp_value_t;
+
+/* bp_value_clear
+ *   Frees any heap allocation owned by *v (currently only STRING
+ *   payloads).  Safe to call on a freshly zero-initialised value or
+ *   one that has already been cleared.  Sets *v back to BP_VAL_NONE. */
+void bp_value_clear(bp_value_t *v);
+
+/* bp_tagdb_read_tags
+ *   Resolves each `names[i]` via the symbol cache, batches all
+ *   requests into one OCXcip_AccessTagData call, and decodes per-tag
+ *   results into `out_values[i]`.
+ *
+ *   For best results, call bp_tagdb_preload_symbols(db) once after
+ *   Build (or let the lazy fill amortize across the first call).
+ *
+ *   Returns:
+ *     BP_OK            — all tags read successfully.
+ *     BP_ERR_GENERIC   — at least one per-tag CIP General Status was
+ *                        non-zero.  Inspect each out_values[i].cip_status.
+ *     BP_ERR_PARAM_RANGE — a name wasn't in the cache (symbol unknown),
+ *                          or the symbol is an array / UDT (scalars +
+ *                          STRING only in v0.9.0).
+ *     other negative rc — IPC / system errors.
+ *
+ *   Caller must bp_value_clear() each entry when done (STRING payloads
+ *   are heap-allocated by the SDK). */
+int bp_tagdb_read_tags(bp_tagdb_t *db,
+                        const char *const *names, size_t count,
+                        bp_value_t *out_values);
+
 /* Symbol-info accessors — convenience wrappers around the bit math. */
 int      bp_symbol_is_array (const bp_symbol_info_t *info);  /* 1 = array,  0 = scalar */
 int      bp_symbol_is_struct(const bp_symbol_info_t *info);  /* 1 = UDT,   0 = atomic */

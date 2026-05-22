@@ -91,6 +91,51 @@ def _read_cstring(buf: memoryview | bytes, max_len: int) -> str:
     return bytes(buf[:n]).decode("ascii", "replace")
 
 
+# ---------------------------------------------------------------------
+# Scalar variant kinds used by read_tags / write_tags.  Mirrors C's
+# bp_value_kind_t.  Keep stable as a string so the C enum can be
+# remapped without touching this module — Python doesn't gain anything
+# from a numeric enum here.
+# ---------------------------------------------------------------------
+_ScalarKind = str   # type alias for clarity in signatures
+
+
+def _kind_for_atomic(data_type: int, elem_byte_size: int) -> _ScalarKind | None:
+    t = data_type & 0x1FFF
+    table = {
+        (P.TYPE_BOOL,  1): "bool",
+        (P.TYPE_SINT,  1): "sint",
+        (P.TYPE_USINT, 1): "usint",
+        (P.TYPE_INT,   2): "int",
+        (P.TYPE_UINT,  2): "uint",
+        (P.TYPE_DINT,  4): "dint",
+        (P.TYPE_UDINT, 4): "udint",
+        (P.TYPE_REAL,  4): "real",
+        (P.TYPE_LINT,  8): "lint",
+        (P.TYPE_ULINT, 8): "ulint",
+        (P.TYPE_LREAL, 8): "lreal",
+    }
+    return table.get((t, elem_byte_size))
+
+
+def _decode_scalar(kind: _ScalarKind, b: bytes) -> object:
+    fmt = {
+        "bool":  ("<B", lambda v: v != 0),
+        "sint":  ("<b", int),
+        "usint": ("<B", int),
+        "int":   ("<h", int),
+        "uint":  ("<H", int),
+        "dint":  ("<i", int),
+        "udint": ("<I", int),
+        "real":  ("<f", float),
+        "lint":  ("<q", int),
+        "ulint": ("<Q", int),
+        "lreal": ("<d", float),
+    }[kind]
+    v = struct.unpack(fmt[0], b[:struct.calcsize(fmt[0])])[0]
+    return fmt[1](v)
+
+
 class TagDB:
     """Per-PLC tag-DB handle.  Construct via Client.open_tagdb(path)."""
 
@@ -421,6 +466,82 @@ class TagDB:
 
     def write_bool(self, tag: str, v: bool) -> None:
         self._scalar_rw(tag, P.TYPE_BOOL, 1, P.ACTION_WRITE, b"\x01" if v else b"\x00")
+
+    # ============================================================
+    # Multi-tag helpers (v0.9.0 Phase 2)
+    # ============================================================
+    def read_tags(self, names: "list[str]") -> "dict[str, object]":
+        """Resolve each name via the per-client symbol cache, batch
+        requests into chunks of 16 (one AccessTagData call per chunk),
+        and return a dict of name -> decoded scalar value.
+
+        Scope (v0.9.0): scalars only.  Arrays or UDTs (incl. STRING
+        family) raise BpParamRange before any IPC.
+
+        Whole-batch failure: if any per-tag CIP General Status is
+        non-zero, raises BpGeneric naming the first failing tag.
+        The exception carries the partial dict on ``.results`` so
+        callers can introspect successful tags.
+        """
+        if names is None:
+            raise BpNullArg("names is required")
+        if not names:
+            return {}
+
+        # Resolve + classify before any IPC.
+        kinds: list[_ScalarKind] = []
+        infos: list[Symbol] = []
+        for name in names:
+            info = self.lookup_symbol(name)
+            if info.dim0 != 0 or info.struct_type != 0:
+                raise BpParamRange(
+                    f"read_tags: {name!r}: arrays/UDTs not supported "
+                    "in v0.9.0 (use read_dint_array / read_string)")
+            kind = _kind_for_atomic(info.data_type, info.elem_byte_size)
+            if kind is None:
+                raise BpParamRange(
+                    f"read_tags: {name!r}: unsupported data_type "
+                    f"0x{info.data_type:04x}")
+            kinds.append(kind)
+            infos.append(info)
+
+        out: dict[str, object] = {}
+        statuses: dict[str, int] = {}
+        failed: list[str] = []
+
+        for start in range(0, len(names), 16):
+            chunk = names[start:start + 16]
+            chunk_infos = infos[start:start + 16]
+            chunk_kinds = kinds[start:start + 16]
+
+            reqs = [
+                TagRequest(
+                    tag_name=name,
+                    data_type=info.data_type,
+                    elem_byte_size=info.elem_byte_size,
+                    action=P.ACTION_READ,
+                    elem_count=1,
+                    data=b"\x00" * info.elem_byte_size,
+                )
+                for name, info in zip(chunk, chunk_infos)
+            ]
+            self.access(reqs)
+            for name, kind, req in zip(chunk, chunk_kinds, reqs):
+                statuses[name] = req.result
+                if req.result == 0:
+                    out[name] = _decode_scalar(kind, req.data)
+                else:
+                    out[name] = None
+                    failed.append(name)
+
+        if failed:
+            err = BpGeneric(
+                f"read_tags: {len(failed)} tag(s) returned non-zero "
+                f"CIP status (first: {failed[0]!r}): {', '.join(failed)}")
+            err.results = out
+            err.statuses = statuses
+            raise err
+        return out
 
     # ============================================================
     # Array helpers
