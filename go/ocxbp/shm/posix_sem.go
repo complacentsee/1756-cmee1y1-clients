@@ -13,7 +13,7 @@
 
 package shm
 
-// #cgo LDFLAGS: -lpthread
+// #cgo LDFLAGS: -lpthread -lrt
 // #include <errno.h>
 // #include <fcntl.h>
 // #include <semaphore.h>
