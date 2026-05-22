@@ -123,6 +123,42 @@ int bp_tagdb_build(bp_tagdb_t *db, uint16_t *out_symbol_count) {
 }
 
 /* ============================================================
+ * TestTagDbVer
+ *
+ * Engine semantics (RE'd from libocxbpapi.so.2.3 OCXcip_TestTagDbVer
+ * at 0x10ab3c): server memcmp's 12 bytes of a freshly-computed
+ * PLC tag-DB version against the value captured during the last
+ * BuildTagDb on this handle.  Engine writes one of these to
+ * slot + 0x50 (errorcode):
+ *   0x00 — versions match (caller's cache is current)
+ *   0x14 — versions differ (caller should rebuild)
+ *   0x15 — tagdb handle has no captured version yet (Build never run
+ *          on this handle, or the version slot is uninitialised)
+ *
+ * Our bp_client_call surfaces these positive values directly because
+ * any non-zero slot errorcode is returned as the rc.  We translate
+ * 0x14 and 0x15 to *out_changed = 1 (the caller's recovery is the
+ * same in both cases: call bp_tagdb_build).
+ * ============================================================ */
+int bp_tagdb_test_version(bp_tagdb_t *db, int *out_changed) {
+    if (!db || !out_changed) return BP_ERR_NULL_ARG;
+    uint32_t h = db->handle;
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_TestTagDbVer",
+        .payload_size = 0x80,
+        .fill_payload = simple_handle_fill,
+        .read_reply   = NULL,
+        .timeout_ms   = 5000,
+        .user         = &h,
+    };
+    int rc = bp_client_call(db->client, &spec);
+    if (rc == 0)    { *out_changed = 0; return BP_OK; }
+    if (rc == 0x14) { *out_changed = 1; return BP_OK; }
+    if (rc == 0x15) { *out_changed = 1; return BP_OK; }
+    return rc;
+}
+
+/* ============================================================
  * GetSymbolInfo
  * ============================================================ */
 typedef struct {

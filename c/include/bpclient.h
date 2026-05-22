@@ -117,6 +117,28 @@ void bp_tagdb_close(bp_tagdb_t *db);
  *   *out_symbol_count if non-NULL. */
 int  bp_tagdb_build(bp_tagdb_t *db, uint16_t *out_symbol_count);
 
+/* bp_tagdb_test_version
+ *   Asks the PLC whether the tag database has changed since the
+ *   last bp_tagdb_build() on this handle.  Cheap (~5 ms) compared
+ *   to a full Build (~200 ms for a few thousand symbols), so the
+ *   recommended pattern is:
+ *
+ *      bp_tagdb_build(db, NULL);            // once after open
+ *      ...
+ *      int changed = 0;
+ *      if (bp_tagdb_test_version(db, &changed) == BP_OK && changed) {
+ *          bp_tagdb_build(db, NULL);        // refresh only when needed
+ *      }
+ *
+ *   On BP_OK return, *out_changed is 0 if the version matches the
+ *   one captured by the last Build, or 1 if it differs OR if no
+ *   Build has been done on this handle yet (so the caller should
+ *   Build either way).
+ *
+ *   Returns BP_OK + sets *out_changed on success.  Negative values
+ *   are surfaced unchanged for IPC / system errors. */
+int  bp_tagdb_test_version(bp_tagdb_t *db, int *out_changed);
+
 /* Symbol descriptor.  Returned by bp_tagdb_symbol_at(). */
 typedef struct {
     char     name[100];      /* NUL-terminated, up to 99 chars */

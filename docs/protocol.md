@@ -254,6 +254,32 @@ tags.  Conclusion: the slot has always been `dim2`; the original
 "instance_id" label was a wrong guess from looking only at non-3-D
 shapes.
 
+### `OCXcip_TestTagDbVer` — has the PLC's tag DB changed?
+
+Cheap (~5 ms) probe — compared to a ~200 ms BuildTagDb on a few-thousand-tag
+PLC.  The engine maintains a 12-byte version vector per tagdb handle that
+gets captured during BuildTagDb; this call recomputes the current PLC-side
+version and memcmp's against the captured one.
+
+```
+fn_name        = "OCXcip_TestTagDbVer"
+payload_size   = 0x80
+
+REQUEST PAYLOAD:
+  slot + 0x78  uint32  db_handle
+
+RESPONSE:
+  slot + 0x50  int32   errorcode — also encodes the result:
+                        0x00 = versions match (caller's cache is current)
+                        0x14 = versions differ (caller should rebuild)
+                        0x15 = tagdb has no captured version yet
+                               (BuildTagDb has not been called on this handle)
+                        other negative values = transport / system errors
+```
+
+The C SDK's `bp_tagdb_test_version` collapses `0x14` and `0x15` into
+`*out_changed = 1`; both signal the caller to call `bp_tagdb_build`.
+
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 
 ```
