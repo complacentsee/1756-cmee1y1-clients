@@ -28,6 +28,7 @@ from .errors import (
     err_code,
     strerror,
 )
+from ._route import build_unconnected_send, port_segment
 from .client import Client, PoolSpec
 from .tagdb import StructInfo, StructMember, Symbol, TagDB
 from .access import TagRequest
@@ -60,6 +61,8 @@ __all__ = [
     "BpEngine",
     "BpCipError",
     "cip_status_message",
+    "build_unconnected_send",
+    "port_segment",
     "strerror",
     "err_code",
 ]

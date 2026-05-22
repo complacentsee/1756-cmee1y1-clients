@@ -84,6 +84,7 @@ runtime (carries glibc + dynamic loader for the cgo POSIX-sem wrapper).
 | `connidentity` | Class-3 connected Identity (LFO + bare Identity + FC) |
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
+| `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |

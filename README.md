@@ -161,6 +161,42 @@ Benchmark from the cm1756 chassis (slot 2 = L85, 4 conns, 8 workers,
 ~2300 req/s (Go), ~1500 req/s (Python). Compare with single-connection
 `TxRxMsg` at ~1000 req/s.
 
+### Multi-hop routes via Unconnected_Send (v0.8.0)
+
+To target a device beyond the local backplane (EtherNet/IP node off
+the L85, ControlNet, DH+, etc.), wrap the target's CIP request inside
+`Unconnected_Send` (CIP svc `0x52`) targeting the slot device's
+Connection Manager.  No SDK or wire-protocol change; the chip just
+forwards the bytes.  See
+[`docs/protocol.md#multi-hop-routes--unconnected_send-service-0x52`](docs/protocol.md)
+for the byte layout.
+
+```c
+// C — Identity GAA routed through L85 (slot 2) back to itself.
+uint8_t embedded[] = { 0x01, 0x02, 0x20, 0x01, 0x24, 0x01 };
+uint8_t route[8];  size_t roff = 0;
+bp_route_append_port(route, sizeof(route), &roff, /*port*/1, /*link*/2);
+uint8_t wrapped[256];
+int wlen = bp_build_unconnected_send(wrapped, sizeof(wrapped),
+                                       embedded, sizeof(embedded),
+                                       route, roff, 5000);
+// Send via MessageSend / TxRxMsg / pool_txrx — the chip is transport-agnostic.
+```
+
+```go
+// Go
+route := make([]byte, 8); off := 0
+cip.AppendPortSegment(route, &off, 1, 2)
+wrapped := make([]byte, 256)
+wlen := cip.BuildUnconnectedSend(wrapped, embedded, route[:off], 5000)
+```
+
+```python
+# Python
+route = bpclient.port_segment(1, 2)
+wrapped = bpclient.build_unconnected_send(embedded, route, 5000)
+```
+
 ### Arrays + STRING
 
 v0.6.0 ships full array + Logix-STRING parity in every SDK:
@@ -231,6 +267,7 @@ Override the default `tagtest` entrypoint via Docker's
 | `connidentity` | Class-3 connected Identity (LFO + bare Identity + FC) |
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
 | `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
+| `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |

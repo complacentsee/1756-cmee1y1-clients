@@ -602,6 +602,103 @@ userland SHRAM access through `/dev/ocx_shram` + `/dev/ocx_cbregs`
 This is **v0.8 RE territory**, tracked separately.  For v0.7.0,
 TxRx* is functional with the same envelope size as MessageSend.
 
+### Multi-hop routes — Unconnected_Send (service 0x52)
+
+The SDK's `bp_message_t.slot` / `ConnSpec.EncodedPath` field only
+addresses **one hop**: chip → backplane slot.  To reach a device
+beyond that slot (EtherNet/IP node off the L85, ControlNet node off
+a CNB, DH+ node off a DHRIO, etc.) the caller wraps their CIP
+request inside an **Unconnected_Send** service (`0x52`) targeting
+the **Connection Manager** of the slot device, which then routes
+through to the actual destination.  No SDK or wire change is
+required — the chip just forwards the bytes the caller assembled.
+
+The Unconnected_Send service is itself a CIP request.  Send it
+exactly like any other CIP body — via `bp_client_message_send`
+(UCMM transport, mailbox 0x200), via `bp_client_txrx_msg` over a
+class-3 connection, or via `bp_client_pool_txrx` from a pool.  The
+chip is transport-agnostic and the L85's Connection Manager
+accepts Unconnected_Send on both paths.
+
+#### Wire format
+
+The Unconnected_Send body (the bytes the SDK puts into
+`bp_message_t.cip_request` or the connected `req` buffer):
+
+```
++0    uint8   service          = 0x52    (Unconnected_Send)
++1    uint8   path_size_words  = 0x02    (request path follows)
++2    uint8[] request_path     = 20 06 24 01  (class 0x06 ConnMgr, instance 1)
++6    uint8   priority_tick    = 0x05    (priority 0, tick = 32 ms)
++7    uint8   timeout_ticks    = ceil(timeout_ms / 32), clamped 1..255
++8    uint16  embedded_msg_sz  (little-endian; byte count of embedded CIP request)
++10   uint8[] embedded_msg     (the target's CIP request — service / path / body)
++L    uint8   pad              (0x00, present iff embedded_msg_sz is odd)
++L'   uint8   route_path_words (count of 16-bit words in route_path)
++L'+1 uint8   reserved         = 0x00
++L'+2 uint8[] route_path       (route_path_words * 2 bytes)
+```
+
+`L = 10 + embedded_msg_sz`, `L' = L + (embedded_msg_sz & 1)`.
+`route_path` is always word-aligned by construction (`_words * 2`),
+so no trailing pad is needed.
+
+#### Route path encoding
+
+Standard CIP port segments.  Each hop is one of:
+
+| Bytes | Meaning |
+|---|---|
+| `01 NN`               | Port 1 (backplane), link address `NN` (slot number) |
+| `02 NN`               | Port 2 (front-side EtherNet/IP, or DH+ on a DHRIO), link address `NN` |
+| `0F 00 ext_lo ext_hi` | Extended link address (16-bit) — for nodes with addresses > 255 |
+| `12 LL <ascii>`       | Extended link address as ASCII (IP literal, used by EIP routers) |
+
+Concatenate one hop per intermediate device.  Two examples:
+
+```
+# Identity on the L85's first EtherNet/IP module (port 2 of the L85,
+# device link address 1 on that segment):
+embedded_msg = 01 02 20 01 24 01           ; Identity Get_Attributes_All
+route_path   = 02 01                       ; one port segment, 1 word
+priority/tick = 05, timeout_ticks = 0xFA   ; ~8 s
+
+# Wrapped Unconnected_Send body (sent to slot 2 = L85 ConnMgr):
+52 02 20 06 24 01     ; svc 0x52, path = ConnMgr
+05 FA                 ; priority/tick + timeout_ticks
+06 00                 ; embedded_msg_sz = 6 (LE)
+01 02 20 01 24 01     ; embedded msg (6 bytes, even — no pad)
+01                    ; route_path_words = 1
+00                    ; reserved
+02 01                 ; route_path (1 word = 2 bytes)
+```
+
+```
+# Identity on a remote DH+ node (slot 2 = L85 in chassis,
+# port 2 = DH+ side of a DHRIO sitting in slot 3 of a remote chassis,
+# DH+ node 5):
+embedded_msg = 01 02 20 01 24 01
+route_path   = 01 03 02 05                 ; two hops: slot 3 → DH+ node 5
+```
+
+#### Helpers
+
+`bp_build_unconnected_send()` (C), `cip.BuildUnconnectedSend()` (Go),
+and `bpclient.build_unconnected_send()` (Python) assemble the body
+above given `(embedded_msg, route_path, timeout_ms)`.  The reply is
+the embedded service's reply (service byte `embedded_svc | 0x80`,
+status, body) and parses normally with the existing decoders — no
+unwrap step is needed; the L85's ConnMgr returns the routed reply
+in the same envelope as a direct reply.
+
+The helpers also expose `parse_unconnected_send_reply()` which is
+the no-op identity transform when the call succeeded (`status = 0`)
+or surfaces the routing error when the route failed (`status != 0`,
+`ext_status` codes in [`docs/error-codes.md`](error-codes.md) —
+common ones: `0x01 / 0x0204` "Unconnected_Send timeout", `0x01 /
+0x0205` "Parameter error in Unconnected_Send", `0x01 / 0x0311`
+"Port not available").
+
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 
 ```

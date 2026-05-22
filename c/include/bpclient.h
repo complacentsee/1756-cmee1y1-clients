@@ -451,6 +451,67 @@ int bp_client_pool_txrx(bp_client_t *client, uint8_t slot,
 int bp_client_pool_close(bp_client_t *client, uint8_t slot);
 
 /* ============================================================
+ * Multi-hop routes — Unconnected_Send (CIP service 0x52)
+ *
+ * To target a device beyond the local chassis backplane (an
+ * EtherNet/IP node off the L85, a DH+ node off a DHRIO, etc.), wrap
+ * the target's CIP request inside an Unconnected_Send service
+ * targeting the slot device's Connection Manager (class 0x06,
+ * instance 1).  The L85's ConnMgr then forwards the embedded
+ * message along the supplied route_path.
+ *
+ * No protocol change is needed — the chip forwards the bytes
+ * verbatim.  Pass the assembled body to bp_client_message_send (UCMM),
+ * bp_client_txrx_msg (class-3 connection), or bp_client_pool_txrx
+ * (pool).
+ *
+ * Wire format documented in docs/protocol.md "Multi-hop routes —
+ * Unconnected_Send (service 0x52)".
+ * ============================================================ */
+
+/* bp_build_unconnected_send
+ *   Assembles an Unconnected_Send (0x52) request body in `out`.
+ *
+ *   Inputs:
+ *     embedded_msg / embedded_len — the target's CIP request bytes
+ *                                   (must start with [service, path_size, ...]).
+ *     route_path  / route_len     — CIP port segments, byte count must
+ *                                   be even (route_path_size is encoded
+ *                                   in 16-bit words).
+ *     timeout_ms                  — total request timeout; the helper
+ *                                   converts to CIP priority/tick + ticks
+ *                                   using tick=5 (32 ms units), clamped
+ *                                   to ticks 1..255 (32 ms..~8 s).
+ *
+ *   Returns the byte count written into `out` on success.  Returns:
+ *     0          if any required argument is NULL,
+ *     -EINVAL    (= -22) if route_len is odd or any size is too large,
+ *     -ENOSPC    (= -28) if `out_cap` is too small for the result.
+ *
+ *   Maximum assembled size: 10 + embedded_len + (embedded_len & 1) +
+ *                            2 + route_len.  Cap embedded_len at
+ *                            BP_MSG_MAX_REQ - 14 (~486 bytes) to keep
+ *                            the wrapped body within the MessageSend
+ *                            500-byte envelope.
+ */
+int bp_build_unconnected_send(uint8_t *out, size_t out_cap,
+                                const uint8_t *embedded_msg, size_t embedded_len,
+                                const uint8_t *route_path,  size_t route_len,
+                                uint16_t timeout_ms);
+
+/* Port-segment helpers — append a port segment to a route_path buffer
+ * at offset `*off`, advancing `*off` by the bytes written.  Returns
+ * BP_OK on success or BP_ERR_PARAM_RANGE if the buffer is too small.
+ *
+ * Standard CIP port encoding:
+ *   port=1 link=N        backplane slot N
+ *   port=2 link=N        front-side EtherNet/IP, link address N
+ *
+ * Caller can also write raw bytes — these are just conveniences. */
+int bp_route_append_port(uint8_t *route, size_t cap, size_t *off,
+                          uint8_t port, uint8_t link);
+
+/* ============================================================
  * Tag database
  * ============================================================ */
 

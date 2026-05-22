@@ -25,6 +25,7 @@ set(LIB_SOURCES
     src/module.c
     src/conn.c
     src/pool.c
+    src/route.c
 )
 
 # Shared library
@@ -119,6 +120,11 @@ target_link_libraries(conntest PRIVATE bpclient pthread rt)
 add_executable(pooltest examples/pooltest.c)
 target_link_libraries(pooltest PRIVATE bpclient pthread rt)
 
+# Example: routedident — v0.8.0 multi-hop Identity via Unconnected_Send
+# (wraps Identity GetAttributesAll in svc 0x52 + route_path).
+add_executable(routedident examples/routedident.c)
+target_link_libraries(routedident PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -148,5 +154,6 @@ install(TARGETS
             connidentity
             conntest
             pooltest
+            routedident
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

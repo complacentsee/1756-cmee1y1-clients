@@ -24,7 +24,7 @@ Produces:
 - `build/tagtest` — the canonical smoke test executable
   (plus the other diagnostic binaries listed in
   [`CMakeLists.txt`](CMakeLists.txt): `msgprobe`, `identity`,
-  `connidentity`, `conntest`, `pooltest`, `pathprobe`, `actnodes`, `modutil`, etc.)
+  `connidentity`, `conntest`, `pooltest`, `routedident`, `pathprobe`, `actnodes`, `modutil`, etc.)
 
 System install:
 
