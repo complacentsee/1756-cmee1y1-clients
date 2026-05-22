@@ -75,6 +75,11 @@ const (
 
 	FnTxRxCloseConn        = "OCXcip_TxRxCloseConn"
 	SizeTxRxCloseConn uint32 = 0x188
+
+	// ParsePath is a debug/RE opcode (not in the C public API).
+	// Surfaced for cmd/pathprobe; see c/examples/pathprobe.c.
+	FnParsePath        = "OCXcip_ParsePath"
+	SizeParsePath uint32 = 0x288
 )
 
 // HdrPayloadStart is duplicated here so cip callers don't need a

@@ -88,6 +88,46 @@ func translateCallErr(err error) error {
 	return err
 }
 
+// ErrCode reverse-maps an error from this package back to the
+// integer rc the C SDK would have returned. Used by diagnostic
+// tools (msgprobe etc.) that need to print an rc value that diffs
+// byte-for-byte against the C tooling output.
+//
+// nil       → BPOk
+// EngineError → its Code
+// sentinels → the matching BP_ERR_* constant
+// anything else (wrapped transport errors) → BPErrGeneric
+func ErrCode(err error) int {
+	if err == nil {
+		return BPOk
+	}
+	var ee EngineError
+	if errors.As(err, &ee) {
+		return ee.Code
+	}
+	switch {
+	case errors.Is(err, ErrSendRequest):
+		return BPErrSendRequest
+	case errors.Is(err, ErrRecvAnswer):
+		return BPErrRecvAnswer
+	case errors.Is(err, ErrNullArg):
+		return BPErrNullArg
+	case errors.Is(err, ErrPending):
+		return BPErrPending
+	case errors.Is(err, ErrNotOpen):
+		return BPErrNotOpen
+	case errors.Is(err, ErrParamRange):
+		return BPErrParamRange
+	case errors.Is(err, ErrSlotTooLarge):
+		return BPErrSlotTooLarge
+	case errors.Is(err, ErrClientOpen):
+		return BPErrClientOpen
+	case errors.Is(err, ErrNoFreeSlot):
+		return BPErrNoFreeSlot
+	}
+	return BPErrGeneric
+}
+
 // Strerror returns a human-readable string for a BP_ERR_* / engine
 // code. Mirrors c/src/errors.c::bp_strerror.
 func Strerror(rc int) string {

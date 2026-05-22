@@ -36,6 +36,16 @@ func (c *Client) Close() {
 	c.shm = nil
 }
 
+// SHM returns the underlying shm.Client. Exposed for diagnostic
+// tools (cmd/pathprobe etc.) that need to issue opcodes not in the
+// public ocxbp API. Application code should not need this.
+func (c *Client) SHM() *shm.Client {
+	if c == nil {
+		return nil
+	}
+	return c.shm
+}
+
 // OpenSession dispatches OCXcip_Open and returns the server-assigned
 // session handle. Must succeed before any other call works.
 func (c *Client) OpenSession() (uint32, error) {
