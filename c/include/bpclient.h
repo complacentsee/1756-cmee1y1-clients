@@ -232,27 +232,32 @@ int bp_client_set_display(bp_client_t *client, const char four_chars[4]);
  *
  * Wraps OCXcip_TxRxOpenConn, OCXcip_TxRxMsg, OCXcip_TxRxCloseConn.
  *
- * STATUS (2026-05-21): the wire-format wrappers compile and dispatch
- * cleanly, but we have NOT yet been able to coax OpenConn into
- * returning a usable connection — the engine returns rc=0x1000 for
- * every parameter combination we have tried.  TxRxMsg returns
- * rc=BP_OK with resp_len=0, suggesting it silently no-ops without
- * an established connection.  Until we crack this, prefer
- * bp_client_get_device_id() and the tagdb path for per-slot CIP.
+ * STATUS (2026-05-21): NOT FUNCTIONAL on cm1756.  OpenConn returns
+ * rc=0x1001 for every (slot, path, conn_params, app_handle)
+ * combination we've tried.  RE traces the failure to
+ * OCXCN_OpenClass3Connection — a PLT thunk in libocxbpapi.so.2.3
+ * pointing to an external OCXCN_* library that is not present in
+ * any binary we have access to on this image.  The connection-
+ * management state machine lives there; the OC_bp* engine and the
+ * APex2 chip firmware are NOT involved in the OpenConn-level
+ * dispatch, so there is no obvious local workaround.
  *
- * Lifecycle (when working):
- *   1. bp_client_txrx_open()  — Forward_Open
- *   2. bp_client_txrx_msg()   — send/receive CIP messages
- *   3. bp_client_txrx_close() — Forward_Close
+ * Empirically verified workaround: a manual Large Forward Open
+ * (CIP service 0x5B) sent via bp_client_message_send DOES succeed
+ * on the L85 (slot 2) and returns valid O→T / T→O connection IDs.
+ * Whether subsequent connected sends/receives work via the same
+ * UCMM transport requires more wire experiments — see
+ * docs/protocol.md "Connected messaging — open issues".
  *
- * IMPORTANT: always close.  A leaked connection eats a PLC resource
- * until the connection-inactivity timeout.
+ * These TxRx wrappers remain in the API so callers can detect the
+ * 0x1001 condition and fall back, but DO NOT rely on them
+ * succeeding in production code.
  *
- * Engine validation requirements (RE'd from OCXcip_TxRxOpenConn in
- * libocxbpapi.so.2.3 @ 0x106f44):
- *   * app_handle MUST equal 1
- *   * encoded_path non-NULL
- *   * path_size > 0
+ * Engine validation (RE'd from OCXcip_TxRxOpenConn at 0x106f44):
+ *   * app_handle MUST equal 1 (else rc=1)
+ *   * iRam0000000000130060 != 0 (else rc=4) — set by _initCl3Access
+ *     at library load, so this is normally satisfied automatically
+ *   * encoded_path non-NULL, path_size > 0 (else rc=1)
  * ============================================================ */
 
 /* Connection spec — caller-managed, passed to every TxRx call.

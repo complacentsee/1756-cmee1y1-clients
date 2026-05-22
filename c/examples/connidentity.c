@@ -4,11 +4,13 @@
  *                  `msgprobe --slot N --req "01 02 20 01 24 01"`.
  *
  * Usage:
- *   connidentity              # default: slot 2 (L85)
+ *   connidentity              # default: slot 2 (L85), path 01 02
  *   connidentity --slot 1     # explicit
+ *   connidentity --path "01 02 20 06 24 01" --conn-params 0x43f8
  *
  * SPDX-License-Identifier: MIT
  */
+#include <ctype.h>
 #include <getopt.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +18,19 @@
 #include <string.h>
 
 #include "bpclient.h"
+
+static size_t parse_hex(const char *s, uint8_t *out, size_t cap) {
+    size_t n = 0;
+    while (*s && n < cap) {
+        while (*s && !isxdigit((unsigned char)*s)) s++;
+        if (!*s) break;
+        unsigned v;
+        if (sscanf(s, "%2x", &v) != 1) break;
+        out[n++] = (uint8_t)v;
+        s += 2;
+    }
+    return n;
+}
 
 static void print_id(const uint8_t *resp, uint16_t resp_len) {
     if (resp_len < 4) { printf("  (response too short)\n"); return; }
@@ -49,37 +64,55 @@ static void print_id(const uint8_t *resp, uint16_t resp_len) {
 int main(int argc, char *argv[]) {
     int slot = 2;
     int conn_params = 0x43E8;  /* P2P class-3, variable, 1000 bytes */
+    int app_handle  = 1;
+    const char *path_hex = NULL;
     static struct option opts[] = {
         {"slot",        required_argument, 0, 's'},
         {"conn-params", required_argument, 0, 'p'},
+        {"path",        required_argument, 0, 'P'},
+        {"app-handle",  required_argument, 0, 'a'},
         {0,0,0,0}
     };
     int c, idx;
-    while ((c = getopt_long(argc, argv, "s:p:", opts, &idx)) != -1) {
+    while ((c = getopt_long(argc, argv, "s:p:P:a:", opts, &idx)) != -1) {
         if      (c == 's') slot = atoi(optarg);
         else if (c == 'p') conn_params = (int)strtol(optarg, NULL, 0);
+        else if (c == 'P') path_hex = optarg;
+        else if (c == 'a') app_handle = (int)strtol(optarg, NULL, 0);
     }
 
     bp_client_t *cl = NULL;
     if (bp_client_open(&cl) != BP_OK) { fprintf(stderr, "open failed\n"); return 2; }
     bp_client_open_session(cl, NULL);
 
-    /* Build route — port 1 (backplane), link = slot */
-    uint8_t epath[2] = { 0x01, (uint8_t)slot };
+    /* Build route — default: port 1 (backplane), link = slot.
+     * --path overrides with arbitrary hex bytes. */
+    uint8_t epath[256];
+    uint16_t epath_len;
+    if (path_hex) {
+        epath_len = (uint16_t)parse_hex(path_hex, epath, sizeof(epath));
+    } else {
+        epath[0] = 0x01;
+        epath[1] = (uint8_t)slot;
+        epath_len = 2;
+    }
     bp_conn_spec_t spec = {
-        .app_handle   = 1,
+        .app_handle   = (uint16_t)app_handle,
         .options      = 0,
         .encoded_path = epath,
-        .path_size    = 2,
+        .path_size    = epath_len,
         .conn_params  = (uint16_t)conn_params,
     };
+    printf("[connidentity] app_handle=%d  slot=%d  conn_params=0x%04x  path=",
+           app_handle, slot, (uint16_t)conn_params);
+    for (uint16_t i = 0; i < epath_len; i++) printf("%02x ", epath[i]);
+    printf("(%u bytes)\n", epath_len);
 
     int rc;
     uint16_t conn_id = 0, conn_serial = 0;
     rc = bp_client_txrx_open(cl, &spec, &conn_id, &conn_serial);
-    printf("[connidentity] slot=%d  conn_params=0x%04x  txrx_open rc=%d (%s)  "
-           "conn_id=0x%04x  serial=0x%04x\n",
-           slot, (uint16_t)conn_params, rc, bp_strerror(rc), conn_id, conn_serial);
+    printf("[connidentity] txrx_open rc=%d (0x%x %s)  conn_id=0x%04x  serial=0x%04x\n",
+           rc, (unsigned)rc, bp_strerror(rc), conn_id, conn_serial);
 
     /* Try TxRxMsg whether or not OpenConn succeeded — some OEM
      * connection models auto-open on first Msg. */

@@ -388,6 +388,60 @@ Range and validity rules:
 | `timeout_ms` | clamped to min 26 | silent; retry budget exhausts → engine rc=14 |
 | `resp_capacity` | `> 0` | SDK returns `BP_ERR_NULL_ARG` |
 
+### Connected messaging — open issues
+
+The `OCXcip_TxRxOpenConn` / `OCXcip_TxRxMsg` / `OCXcip_TxRxCloseConn`
+APIs are documented for completeness but **do not work on cm1756**.
+
+Symptom: `OCXcip_TxRxOpenConn` always returns rc=`0x1001` (4097)
+regardless of `(slot, encoded_path, conn_params, app_handle)`.
+
+Cause (Ghidra RE of libocxbpapi.so.2.3 @ 0x106f44 →
+external thunks at 0x134048+): the inner `func_0x0010664c` resolves
+to `OCXCN_OpenClass3Connection`, a PLT entry pointing to an
+`OCXCN_*` library that is not present anywhere on the cm1756 image
+we have.  The `OCXCN_*` thunk family covers `RegisterConnectionObj`,
+`OpenClass3Connection`, `CloseClass3Connection`, `SendClass3Request`,
+`UnregisterConnectionObj` — the entire connection-management
+state machine.  The `OC_bp*` engine in libocxbpeng.so.2.3 and the
+APex2 chip firmware are NOT involved at the OpenConn dispatch
+level, so we have no local workaround through that path.
+
+Workaround that does work today (verified 2026-05-21 on L85, slot 2):
+
+1. Build a Large Forward Open (CIP service `0x5B`) request body —
+   borrow the encoding from
+   [historianupdate `apex2_cip_connection.c::build_forward_open`](../../historianupdate/driver/apex2/daemon/apex2_cip_connection.c).
+2. Send it via `bp_client_message_send` with the target slot.
+3. Parse the response — reply service `0xDB`, general status `0x00`,
+   body contains the PLC-chosen O→T connection ID and the echoed
+   T→O connection ID.
+
+Captured 2026-05-21 against L85 (slot 2):
+
+```
+slot=2 timeout_ms=5000
+req=5b 02 20 06 24 01 05 f7 00 00 01 80 01 00 00 80 34 12 01 00
+    ef be ad de 03 00 00 00 80 96 98 00 00 00 00 42 80 96 98 00
+    00 00 00 42 a3 02 20 02 24 01   (50 bytes, Large Forward Open)
+
+resp (30 bytes):
+db 00 00 00 2f 04 02 80 01 00 00 80 34 12 01 00
+ef be ad de 80 96 98 00 80 96 98 00 00 00
+^^^^^^^^^^^ ^^^^^^^^^^^ ^^^^^^^^^^^
+reply hdr   O→T conn ID T→O conn ID (= 0x80000001 echo'd)
+                = 0x8002042f
+```
+
+Whether subsequent **connected** sends/receives work via the same
+UCMM transport path remains to be tested.  The sibling apex2d
+daemon (`apex2_cip_connection.c::cip_connected_send`) reports that
+on the same chip family CB+0x1D=0x0D (UCMM round-trip) carries
+connected payloads transparently — the PLC sees the connection
+because it has already accepted the Forward Open and routes by
+the embedded connection ID — but this requires sequence-number
+prepending and is beyond the scope of the current SDK.
+
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 
 ```
