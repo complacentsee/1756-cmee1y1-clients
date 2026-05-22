@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bpclient"
+version = "0.5.0-wip"
+description = "Outbound CIP-over-bpServer SDK for the 1756-CMEE1Y1 EEC card"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "complacentsee" }]
+dependencies = [
+    "posix_ipc>=1.1.1",
+]
+
+[project.urls]
+Repository = "https://github.com/complacentsee/1756-cmee1y1-clients"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bpclient"]
