@@ -62,21 +62,22 @@ MSG_MAX_SLOT = 0x13                # engine validates < 0x14
 MSG_MAX_REQ = 500                  # engine validates path_size <= 500
 MSG_MIN_TIMEOUT = 26               # engine clamps below this
 
-# TxRx (class-3 connected) layout — NOT FUNCTIONAL on cm1756
-TXRX_APP_HANDLE_OFF = 0x00078
-TXRX_OPTIONS_OFF = 0x0007C
-TXRX_PATH_OFF = 0x00080
-TXRX_PATH_SIZE_OFF = 0x00180
-TXRX_CONN_PARAMS_OFF = 0x00182
-TXRX_CONN_ID_OFF = 0x00184
-TXRX_CONN_SERIAL_OFF = 0x00186
-TXRXMSG_REQ_BUF_OFF = 0x00184
-TXRXMSG_REQ_SIZE_OFF = 0x19084
-TXRXMSG_RESP_BUF_OFF = 0x19086
-TXRXMSG_RESP_LEN_OFF = 0x32186
-TXRX_OPENCLOSE_PAYLOAD = 0x188
-TXRXMSG_PAYLOAD = 0x32190
+# OCXcip_TxRx* slot layout (v0.6 and earlier).  v0.7.0+ bypasses
+# these opcodes entirely — txrx_* on Client routes through
+# message_send instead.  Constants kept only for TXRX_MAX_PATH
+# (still used as the path-size validation cap).
 TXRX_MAX_PATH = 0xFF
+
+# Large Forward Open / Forward_Close defaults (v0.7.0+).
+# See docs/protocol.md "Connected messaging — wire format".
+LFO_DEFAULT_OT_SIZE = 4000          # SDK default O→T/T→O size
+LFO_MAX_OT_SIZE = 4002              # absolute hardware ceiling
+LFO_VENDOR_ID = 0x0001              # Rockwell
+LFO_RPI_US = 10_000_000             # 10 s, matches sibling FO_OT_RPI_US
+_LFO_PARAMS_HI = 0x42000000         # P2P + variable
+_LFO_OT_HINT = 0x80010000
+_LFO_TO_HINT = 0x80000001
+TXRX_MAX_CONNS = 16                 # per Client
 
 # CIP atomic type codes (low 13 bits of data_type)
 TYPE_BOOL = 0xC1

@@ -229,3 +229,162 @@ def test_bool_array_packs_to_dwords():
     assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_DATATYPE_OFF)[0] == P.TYPE_BIT_ARRAY
     assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_ELEM_BYTE_SIZE_OFF)[0] == 4
     assert struct.unpack_from("<H", fake.slot, req_start + P.REQ_ELEM_COUNT_OFF)[0] == 2  # ceil(34/32)
+
+
+# ─────────────────────────────────────────────────────────────────
+# v0.7.0 Phase 4: connected-messaging wire encoder tests.
+# These hit the pure-Python LFO/FC encoders in _conn_wire — no
+# fake IPC needed.
+# ─────────────────────────────────────────────────────────────────
+
+
+def test_build_forward_open_matches_protocol_md_layout():
+    """Large Forward Open body bytes match docs/protocol.md exactly."""
+    from bpclient import _conn_wire as cw
+    from bpclient import _proto as P
+
+    body = cw.build_forward_open(
+        conn_serial=0xA5A8,
+        orig_serial=0x671D8056,
+        ot_size_bytes=4000,
+    )
+    assert len(body) == 50
+
+    # service + path
+    assert body[0] == 0x5B
+    assert body[1:6] == bytes([0x02, 0x20, 0x06, 0x24, 0x01])
+
+    # priority/tick
+    assert body[6:8] == bytes([0x05, 0xF7])
+
+    # O→T conn ID hint = 0x80010000, T→O hint = 0x80000001 (LE)
+    assert struct.unpack_from("<I", body, 0x08)[0] == 0x80010000
+    assert struct.unpack_from("<I", body, 0x0C)[0] == 0x80000001
+
+    # conn serial + vendor + orig serial
+    assert struct.unpack_from("<H", body, 0x10)[0] == 0xA5A8
+    assert struct.unpack_from("<H", body, 0x12)[0] == P.LFO_VENDOR_ID
+    assert struct.unpack_from("<I", body, 0x14)[0] == 0x671D8056
+
+    # timeout multiplier (3) → RPI × 4
+    assert struct.unpack_from("<I", body, 0x18)[0] == 0x00000003
+
+    # OT/TO RPI + conn params dwords — both pairs identical
+    assert struct.unpack_from("<I", body, 0x1C)[0] == P.LFO_RPI_US
+    assert struct.unpack_from("<I", body, 0x20)[0] == (0x42000000 | 4000)
+    assert struct.unpack_from("<I", body, 0x24)[0] == P.LFO_RPI_US
+    assert struct.unpack_from("<I", body, 0x28)[0] == (0x42000000 | 4000)
+
+    # transport trigger + conn path
+    assert body[0x2C] == 0xA3
+    assert body[0x2D:0x32] == bytes([0x02, 0x20, 0x02, 0x24, 0x01])
+
+
+def test_parse_forward_open_extracts_ids_from_real_l85_reply():
+    """The 30-byte capture from the connexp run (docs/protocol.md):
+
+        db 00 00 00 35 04 02 80 01 00 00 80 ...
+    """
+    from bpclient import _conn_wire as cw
+
+    resp = bytes.fromhex(
+        "db00000035040280010000 80a8a5010056801d6780969800809698000000")
+    ot, to, status, ok = cw.parse_forward_open(resp)
+    assert ok
+    assert status == 0
+    assert ot == 0x80020435
+    assert to == 0x80000001
+
+
+def test_parse_forward_open_rejects_error_replies():
+    """LFO general status != 0 → ok=False, ids zeroed."""
+    from bpclient import _conn_wire as cw
+
+    # 0xDB + status=0x02 (Resource unavailable, as seen with oversize OT)
+    resp = bytes([0xDB, 0x00, 0x02, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])
+    ot, to, status, ok = cw.parse_forward_open(resp)
+    assert not ok
+    assert status == 0x02
+    assert ot == 0 and to == 0
+
+
+def test_build_forward_close_matches_protocol_md_layout():
+    from bpclient import _conn_wire as cw
+    from bpclient import _proto as P
+
+    body = cw.build_forward_close(
+        conn_serial=0xA5A8,
+        vendor_id=P.LFO_VENDOR_ID,
+        orig_serial=0x671D8056,
+    )
+    assert len(body) == 22
+    assert body[0] == 0x4E
+    assert body[1:6] == bytes([0x02, 0x20, 0x06, 0x24, 0x01])
+    assert body[6:8] == bytes([0x0A, 0x0E])  # priority/tick
+    assert struct.unpack_from("<H", body, 0x08)[0] == 0xA5A8
+    assert struct.unpack_from("<H", body, 0x0A)[0] == P.LFO_VENDOR_ID
+    assert struct.unpack_from("<I", body, 0x0C)[0] == 0x671D8056
+    assert body[0x10:0x16] == bytes([0x02, 0x00, 0x20, 0x02, 0x24, 0x01])
+
+
+def test_parse_forward_close_accepts_ce_status_zero():
+    from bpclient import _conn_wire as cw
+
+    # The 14-byte capture: ce 00 00 00 a8 a5 01 00 56 80 1d 67 00 00
+    resp = bytes.fromhex("ce0000 00a8a5010056801d670000".replace(" ", ""))
+    status, ok = cw.parse_forward_close(resp)
+    assert ok
+    assert status == 0
+
+
+def test_extract_slot_only_accepts_backplane_direct():
+    from bpclient import _conn_wire as cw
+
+    assert cw.extract_slot(b"\x01\x02", 2) == 2
+    assert cw.extract_slot(b"\x01\x00", 2) == 0
+    # Wrong port byte
+    assert cw.extract_slot(b"\x02\x02", 2) is None
+    # Wrong path_size
+    assert cw.extract_slot(b"\x01\x02\x03\x04", 4) is None
+    # Too-short buffer
+    assert cw.extract_slot(b"\x01", 2) is None
+
+
+def test_txrx_msg_passes_request_unmodified_no_seq_prepended():
+    """v0.7.0 contract: txrx_msg sends caller bytes byte-for-byte.
+    No connection ID or sequence number is prepended (sibling RE
+    established that the chip's MBOX_LOOPBACK transport handles
+    framing transparently — see docs/protocol.md "Sequence numbers
+    are NOT prepended")."""
+    c, fake = _make_client_with_fake()
+
+    # Stage cached connection state directly so we skip the LFO round-trip.
+    from bpclient.client import _TxRxState
+    c._txrx_conns[42] = _TxRxState(
+        slot=2, conn_serial=0xBEEF, vendor_id=1, orig_serial=0xDEADBEEF,
+        ot_conn_id=0x80020435, to_conn_id=0x80000001,
+    )
+
+    spec = bpclient.ConnSpec(
+        app_handle=42, encoded_path=b"\x01\x02", path_size=2)
+    cip_req = bytes([0x01, 0x02, 0x20, 0x01, 0x24, 0x01])
+
+    def load(slot):
+        resp = bytes([0x81, 0x00, 0x00, 0x00, 0x01, 0x00])
+        slot[P.MSGSEND_RESPDATA_OFF:P.MSGSEND_RESPDATA_OFF + len(resp)] = resp
+        struct.pack_into("<H", slot, P.MSGSEND_RESPLEN_OFF, len(resp))
+        struct.pack_into("<I", slot, P.MSGSEND_STATUS_OFF, 0)
+
+    fake.response_loader = load
+    resp = c.txrx_msg(spec, cip_req, 256)
+
+    # The fake MessageSend dispatcher should have copied cip_req
+    # verbatim — same offset as plain MessageSend, NO conn ID /
+    # seq prefix bytes.
+    assert bytes(fake.slot[P.MSGSEND_REQ_OFF:P.MSGSEND_REQ_OFF + len(cip_req)]) == cip_req
+    assert struct.unpack_from("<H", fake.slot, P.MSGSEND_REQ_SIZE_OFF)[0] == len(cip_req)
+    assert fake.slot[P.MSGSEND_SLOT_OFF] == 2
+    # Sequence counter advanced (diagnostic only).
+    assert c._txrx_conns[42].sequence == 1
+    # Reply propagated.
+    assert resp[:4] == bytes([0x81, 0x00, 0x00, 0x00])

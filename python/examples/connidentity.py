@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """connidentity — class-3 connected Identity query.  Mirrors
-c/examples/connidentity.c CLI + output format.
+c/examples/connidentity.c + go/cmd/connidentity CLI + output format.
 
-STATUS: NOT FUNCTIONAL on cm1756 — OpenConn returns 0x1001 because
-the OCXCN_OpenClass3Connection library is missing from the chip
-image.  Kept for parity with the C/Go tooling.
+v0.7.0+: Drives Client.txrx_open / txrx_msg / txrx_close end-to-end
+against a real PLC.  The SDK internally builds Large Forward Open +
+Forward_Close around the caller's Identity Get_Attributes_All
+(svc 0x01) request, all via message_send.
 
 SPDX-License-Identifier: MIT
 """
@@ -68,8 +69,9 @@ def print_id(resp: bytes) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(prog="connidentity")
     ap.add_argument("--slot", type=int, default=2)
-    ap.add_argument("--conn-params", type=lambda x: int(x, 0), default=0x43E8,
-                    dest="conn_params")
+    ap.add_argument("--conn-params", type=lambda x: int(x, 0), default=0,
+                    dest="conn_params",
+                    help="O→T/T→O size in bytes; 0 = SDK default 4000")
     ap.add_argument("--path", default="")
     ap.add_argument("--app-handle", type=int, default=1, dest="app_handle")
     args = ap.parse_args()
@@ -132,7 +134,8 @@ def main() -> int:
     print(f"[connidentity] txrx_close rc={crc} ({bpclient.strerror(crc)})")
 
     client.close()
-    return 0
+    ok = (mrc == 0 and len(resp) >= 4 and resp[0] == 0x81 and resp[2] == 0x00)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

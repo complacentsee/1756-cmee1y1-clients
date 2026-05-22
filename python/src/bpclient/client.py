@@ -7,15 +7,42 @@ concentrates the dispatch glue.
 
 SPDX-License-Identifier: MIT
 """
+import os
+import random
 import struct
-from dataclasses import dataclass
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
 
+from . import _conn_wire as cw
 from . import _proto as P
 from ._ipc import Client as _RawClient
 from .conn import ConnSpec
-from .errors import BpNullArg, BpParamRange, BpSlotTooLarge, raise_for_rc
+from .errors import (
+    BpEngine,
+    BpGeneric,
+    BpNotOpen,
+    BpNoFreeSlot,
+    BpNullArg,
+    BpParamRange,
+    BpSlotTooLarge,
+    raise_for_rc,
+)
 from .identity import Identity
 from .message import Message
+
+
+@dataclass
+class _TxRxState:
+    """Per-connection state cached on the Client."""
+    slot: int
+    conn_serial: int
+    vendor_id: int
+    orig_serial: int
+    ot_conn_id: int
+    to_conn_id: int
+    sequence: int = 0       # diagnostic only — NOT on the wire
 
 
 class Client:
@@ -35,6 +62,9 @@ class Client:
 
     def __init__(self) -> None:
         self._raw = _RawClient()
+        # v0.7.0+ class-3 connected-messaging cache.  See txrx_open.
+        self._txrx_mu = threading.Lock()
+        self._txrx_conns: dict[int, _TxRxState] = {}
 
     @property
     def raw(self) -> _RawClient:
@@ -265,90 +295,207 @@ class Client:
         self._raw.call("OCXcip_SetDisplay", 0x80, fill=fill, timeout_ms=5000)
 
     # ============================================================
-    # TxRx — class-3 connected messaging (NOT FUNCTIONAL on cm1756)
+    # TxRx — class-3 connected messaging (v0.7.0+ small-buffer impl)
     # ============================================================
-    # OCXcip_TxRxOpenConn / TxRxMsg / TxRxCloseConn return engine code
-    # 0x1001 on cm1756 because the OCXCN_OpenClass3Connection library
-    # is missing.  Workaround: send a Large Forward Open (svc 0x5B)
-    # via message_send; see c/examples/connidentity.c for the recipe.
-    # These methods are kept for parity with the C SDK so failure
-    # paths can be diffed across languages.
+    # v0.7.0+ implementation: routes the connection lifecycle through
+    # Client.message_send (chip mailbox 0x200, UCMM transport).  The
+    # OCXcip_TxRx* OEM entry points are not used — they dispatch to
+    # OCXCN_OpenClass3Connection in a library missing from the
+    # cm1756 image (Ghidra RE of libocxbpapi.so.2.3 @ 0x106f44).
+    #
+    # Wire format documented in docs/protocol.md "Connected messaging
+    # — wire format".  Sequence numbers are NOT prepended to txrx_msg
+    # requests — the chip's MBOX_LOOPBACK transport treats UCMM and
+    # connected CIP identically (sibling apex2_cip_connection.c:1346-1362
+    # has the empirical record).
+    #
+    # State lifecycle:
+    #   txrx_open  → Forward_Open, caches state keyed by spec.app_handle.
+    #   txrx_msg   → looks up state, sends request bytes UNMODIFIED.
+    #   txrx_close → Forward_Close, evicts cached state.
+    #
+    # Concurrent open() with the same app_handle raises BpGeneric.
+    # Up to P.TXRX_MAX_CONNS connections per Client.
+    #
+    # Known limitation: inherits the ~500 B envelope from
+    # MessageSend.  4002-byte transport via chip mbox 0x204 is
+    # v0.8 territory — see docs/v0.8-large-buffer-re.md.
+
+    def _next_conn_serial(self) -> int:
+        v = random.getrandbits(16)
+        return v if v != 0 else 0xBEEF
+
+    def _next_orig_serial(self) -> int:
+        return (os.getpid() & 0xFFFFFFFF) ^ ((int(time.time()) << 16) & 0xFFFFFFFF)
+
+    def _best_effort_close(self, slot: int, conn_serial: int,
+                            vendor_id: int, orig_serial: int) -> None:
+        """Send a Forward_Close ignoring the outcome — cleanup after
+        a txrx_open failure path so the PLC's table doesn't leak."""
+        try:
+            fc_msg = Message(
+                slot=slot,
+                cip_request=cw.build_forward_close(conn_serial, vendor_id, orig_serial),
+                resp_data=b"",
+                resp_capacity=64,
+                timeout_ms=5000,
+            )
+            self.message_send(fc_msg)
+        except Exception:
+            pass
 
     def txrx_open(self, spec: ConnSpec) -> tuple[int, int]:
-        """OCXcip_TxRxOpenConn: returns (conn_id, conn_serial).
-        STATUS: NOT FUNCTIONAL on cm1756."""
+        """Open a class-3 connection.
+
+        Sends a Large Forward Open (CIP svc 0x5B) to the slot encoded
+        in spec.encoded_path (must be the canonical {0x01, slot}
+        backplane-direct shape).  On success, caches state keyed by
+        spec.app_handle and returns ``(conn_id_lo16, conn_serial)``:
+
+          conn_id_lo16  – low 16 of the PLC-assigned O→T conn ID
+          conn_serial   – the random 16-bit serial we sent in the LFO
+                          (echoed by the PLC's Forward_Close reply)
+
+        spec.conn_params, if non-zero, sets O→T/T→O size in BYTES.
+        0 → SDK default 4000.  Hardware max 4002; values above are
+        capped with a warning.
+        """
         if spec is None or not spec.encoded_path:
             raise BpNullArg("spec.encoded_path is required")
         if spec.path_size == 0 or spec.path_size > P.TXRX_MAX_PATH:
             raise BpParamRange("path_size out of range")
-        conn_id = conn_serial = 0
 
-        def fill(slot):
-            struct.pack_into("<HI", slot, P.TXRX_APP_HANDLE_OFF,
-                             spec.app_handle, spec.options)
-            slot[P.TXRX_PATH_OFF:P.TXRX_PATH_OFF + spec.path_size] = spec.encoded_path[:spec.path_size]
-            struct.pack_into("<HH", slot, P.TXRX_PATH_SIZE_OFF,
-                             spec.path_size, spec.conn_params)
+        slot = cw.extract_slot(spec.encoded_path, spec.path_size)
+        if slot is None:
+            raise BpParamRange(
+                "encoded_path must be the canonical backplane-direct "
+                "shape {0x01, slot} for v0.7.0")
+        if slot > P.MSG_MAX_SLOT:
+            raise BpSlotTooLarge(f"slot {slot} > {P.MSG_MAX_SLOT}")
 
-        def read(slot):
-            nonlocal conn_id, conn_serial
-            conn_id, conn_serial = struct.unpack_from("<HH", slot, P.TXRX_CONN_ID_OFF)
+        ot_size = spec.conn_params if spec.conn_params else P.LFO_DEFAULT_OT_SIZE
+        if ot_size > P.LFO_MAX_OT_SIZE:
+            print(f"[txrx_open] conn_params={ot_size} exceeds LFO max "
+                  f"{P.LFO_MAX_OT_SIZE}; capping (caller probably passed "
+                  f"a stale OEM 16-bit param)", file=sys.stderr)
+            ot_size = P.LFO_MAX_OT_SIZE
 
-        self._raw.call("OCXcip_TxRxOpenConn", P.TXRX_OPENCLOSE_PAYLOAD,
-                       fill=fill, read=read, timeout_ms=30000)
-        return conn_id, conn_serial
+        conn_serial = self._next_conn_serial()
+        orig_serial = self._next_orig_serial()
+        lfo = cw.build_forward_open(conn_serial, orig_serial, ot_size)
+
+        msg = Message(
+            slot=slot,
+            cip_request=lfo,
+            resp_data=b"",
+            resp_capacity=64,
+            timeout_ms=5000,
+        )
+        self.message_send(msg)
+
+        ot_conn_id, to_conn_id, status, ok = cw.parse_forward_open(msg.resp_data)
+        if not ok:
+            svc = msg.resp_data[0] if msg.resp_data else 0
+            ext = 0
+            if len(msg.resp_data) >= 6 and msg.resp_data[3]:
+                ext = msg.resp_data[4] | (msg.resp_data[5] << 8)
+            print(f"[txrx_open] LFO CIP failure: svc=0x{svc:02x} "
+                  f"status=0x{status:02x} ext=0x{ext:04x} slot={slot}",
+                  file=sys.stderr)
+            raise BpGeneric(
+                f"Forward_Open rejected: svc=0x{svc:02x} status=0x{status:02x}")
+
+        with self._txrx_mu:
+            if spec.app_handle in self._txrx_conns:
+                existing = self._txrx_conns[spec.app_handle]
+                self._best_effort_close(slot, conn_serial,
+                                        P.LFO_VENDOR_ID, orig_serial)
+                raise BpGeneric(
+                    f"app_handle={spec.app_handle} already open "
+                    f"(slot={existing.slot}, serial=0x{existing.conn_serial:04x}) "
+                    f"— call txrx_close first")
+            if len(self._txrx_conns) >= P.TXRX_MAX_CONNS:
+                self._best_effort_close(slot, conn_serial,
+                                        P.LFO_VENDOR_ID, orig_serial)
+                raise BpNoFreeSlot(
+                    f"max {P.TXRX_MAX_CONNS} TxRx connections per Client")
+            self._txrx_conns[spec.app_handle] = _TxRxState(
+                slot=slot,
+                conn_serial=conn_serial,
+                vendor_id=P.LFO_VENDOR_ID,
+                orig_serial=orig_serial,
+                ot_conn_id=ot_conn_id,
+                to_conn_id=to_conn_id,
+            )
+
+        return ot_conn_id & 0xFFFF, conn_serial
 
     def txrx_msg(self, spec: ConnSpec, req: bytes, resp_capacity: int) -> bytes:
-        """OCXcip_TxRxMsg: returns the response bytes.
-        STATUS: NOT FUNCTIONAL on cm1756."""
-        if spec is None or not spec.encoded_path:
-            raise BpNullArg("spec.encoded_path is required")
-        if spec.path_size == 0 or spec.path_size > P.TXRX_MAX_PATH:
-            raise BpParamRange("path_size out of range")
+        """Send one CIP request over the connection identified by
+        ``spec.app_handle``.  Returns the raw CIP reply bytes.
+
+        The caller's request is sent byte-for-byte (no sequence
+        prepending — see docs/protocol.md).
+
+        v0.7.0 cap: ``len(req) ≤ P.MSG_MAX_REQ`` (500 bytes).
+        """
+        if spec is None:
+            raise BpNullArg("spec is required")
+        if not req:
+            raise BpNullArg("req is required")
         if resp_capacity <= 0:
             raise BpNullArg("resp_capacity must be > 0")
-        req_size = len(req)
-        out = b""
 
-        def fill(slot):
-            struct.pack_into("<HI", slot, P.TXRX_APP_HANDLE_OFF,
-                             spec.app_handle, spec.options)
-            slot[P.TXRX_PATH_OFF:P.TXRX_PATH_OFF + spec.path_size] = spec.encoded_path[:spec.path_size]
-            struct.pack_into("<HH", slot, P.TXRX_PATH_SIZE_OFF,
-                             spec.path_size, spec.conn_params)
-            if req_size > 0:
-                slot[P.TXRXMSG_REQ_BUF_OFF:P.TXRXMSG_REQ_BUF_OFF + req_size] = req[:req_size]
-            struct.pack_into("<H", slot, P.TXRXMSG_REQ_SIZE_OFF, req_size)
-            struct.pack_into("<H", slot, P.TXRXMSG_RESP_LEN_OFF, resp_capacity)
+        with self._txrx_mu:
+            state = self._txrx_conns.get(spec.app_handle)
+            if state is None:
+                raise BpNotOpen(
+                    f"no open connection for app_handle={spec.app_handle}")
+            slot = state.slot
+            state.sequence += 1  # diagnostic only
 
-        def read(slot):
-            nonlocal out
-            got = struct.unpack_from("<H", slot, P.TXRXMSG_RESP_LEN_OFF)[0]
-            if got > resp_capacity:
-                got = resp_capacity
-            if got > 0:
-                out = bytes(slot[P.TXRXMSG_RESP_BUF_OFF:P.TXRXMSG_RESP_BUF_OFF + got])
-
-        self._raw.call("OCXcip_TxRxMsg", P.TXRXMSG_PAYLOAD,
-                       fill=fill, read=read, timeout_ms=30000)
-        return out
+        msg = Message(
+            slot=slot,
+            cip_request=bytes(req),
+            resp_data=b"",
+            resp_capacity=resp_capacity,
+            timeout_ms=5000,
+        )
+        self.message_send(msg)
+        return msg.resp_data
 
     def txrx_close(self, spec: ConnSpec) -> None:
-        """OCXcip_TxRxCloseConn.
-        STATUS: NOT FUNCTIONAL on cm1756."""
-        if spec is None or not spec.encoded_path:
-            raise BpNullArg("spec.encoded_path is required")
-        if spec.path_size == 0 or spec.path_size > P.TXRX_MAX_PATH:
-            raise BpParamRange("path_size out of range")
+        """Release the connection.  Sends Forward_Close using the
+        cached identifiers, then evicts the state regardless of FC
+        outcome.  Raises ``BpNotOpen`` if no entry matches
+        ``spec.app_handle``."""
+        if spec is None:
+            raise BpNullArg("spec is required")
 
-        def fill(slot):
-            struct.pack_into("<HI", slot, P.TXRX_APP_HANDLE_OFF,
-                             spec.app_handle, spec.options)
-            slot[P.TXRX_PATH_OFF:P.TXRX_PATH_OFF + spec.path_size] = spec.encoded_path[:spec.path_size]
-            struct.pack_into("<H", slot, P.TXRX_PATH_SIZE_OFF, spec.path_size)
+        with self._txrx_mu:
+            state = self._txrx_conns.pop(spec.app_handle, None)
+            if state is None:
+                raise BpNotOpen(
+                    f"no open connection for app_handle={spec.app_handle}")
 
-        self._raw.call("OCXcip_TxRxCloseConn", P.TXRX_OPENCLOSE_PAYLOAD,
-                       fill=fill, timeout_ms=5000)
+        msg = Message(
+            slot=state.slot,
+            cip_request=cw.build_forward_close(
+                state.conn_serial, state.vendor_id, state.orig_serial),
+            resp_data=b"",
+            resp_capacity=64,
+            timeout_ms=5000,
+        )
+        self.message_send(msg)
+
+        status, ok = cw.parse_forward_close(msg.resp_data)
+        if not ok:
+            svc = msg.resp_data[0] if msg.resp_data else 0
+            print(f"[txrx_close] FC CIP failure: svc=0x{svc:02x} "
+                  f"status=0x{status:02x} slot={state.slot} "
+                  f"serial=0x{state.conn_serial:04x}", file=sys.stderr)
+            raise BpGeneric(
+                f"Forward_Close rejected: svc=0x{svc:02x} status=0x{status:02x}")
 
 
 # Re-import to avoid a circular ref at module top.
