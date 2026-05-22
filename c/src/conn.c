@@ -299,6 +299,24 @@ int bp_client_txrx_msg(bp_client_t *cl, const bp_conn_spec_t *spec,
     return rc;
 }
 
+/* ────────── bp_txrx_force_close_local (v0.9.0 Phase 4) ──────── */
+/* Wipes a single txrx_conn slot locally — no Forward_Close on the
+ * wire.  Used by the pool's auto-reopen path when the PLC has
+ * already dropped the connection (keepalive ping failed); the
+ * caller will re-issue Forward_Open with the same app_handle. */
+int bp_txrx_force_close_local(bp_client_t *cl, uint16_t app_handle) {
+    if (!cl) return BP_ERR_NULL_ARG;
+    pthread_mutex_lock(&cl->txrx_mu);
+    struct bp_txrx_conn *e = find_conn(cl, app_handle);
+    if (!e) {
+        pthread_mutex_unlock(&cl->txrx_mu);
+        return BP_ERR_NOT_OPEN;
+    }
+    e->in_use = 0;
+    pthread_mutex_unlock(&cl->txrx_mu);
+    return BP_OK;
+}
+
 /* ────────── bp_client_txrx_close ────────────────────────────── */
 int bp_client_txrx_close(bp_client_t *cl, const bp_conn_spec_t *spec) {
     if (!cl || !spec) return BP_ERR_NULL_ARG;

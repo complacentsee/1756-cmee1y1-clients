@@ -100,6 +100,8 @@ int bp_client_pool_open(bp_client_t *cl, const bp_pool_spec_t *spec) {
         pool->entries[i].app_handle = 0;
         pool->entries[i].last_used  = 0;
         pool->entries[i].dead       = 0;
+        pool->entries[i].last_reopen_attempt = 0;
+        pool->entries[i].reopen_backoff_ms   = 0;
     }
     pool->ka_active = 0;
     pool->ka_stop   = 0;
@@ -297,14 +299,76 @@ static void *pool_keepalive_loop(void *arg) {
             e->in_use    = 0;
             e->last_used = time(NULL);
             if (prc != BP_OK) {
-                /* Mark dead; next pool_txrx that round-robins past
-                 * this entry will skip it.  We don't attempt re-open
-                 * automatically — that's pool_close + pool_open. */
+                /* v0.9.0+: mark dead AND schedule auto-reopen on the
+                 * next keepalive tick.  Backoff starts at 1 s. */
                 e->dead = 1;
+                e->last_reopen_attempt = time(NULL);
+                if (e->reopen_backoff_ms == 0) e->reopen_backoff_ms = 1000;
                 fprintf(stderr, "[pool keepalive] slot=%u entry %d ping failed rc=%d — entry marked dead\n",
                         pool->slot, i, prc);
             }
             pthread_cond_signal(&pool->cv);
+            pthread_mutex_unlock(&pool->mu);
+        }
+
+        /* v0.9.0 Phase 4: walk dead entries and attempt auto-reopen.
+         * Each dead entry has its own backoff (1s → 2s → 4s → ...
+         * cap 30s).  On success: dead=0, backoff resets, signal cv so
+         * a waiting pool_txrx picks it up.  On failure: double backoff. */
+        for (int i = 0; i < pool->size; i++) {
+            pthread_mutex_lock(&pool->mu);
+            if (pool->ka_stop) { pthread_mutex_unlock(&pool->mu); goto out; }
+            struct bp_pool_entry *e = &pool->entries[i];
+            if (!e->dead || e->in_use) {
+                pthread_mutex_unlock(&pool->mu);
+                continue;
+            }
+            time_t t_now = time(NULL);
+            long since_attempt_ms = (long)(t_now - e->last_reopen_attempt) * 1000;
+            if (since_attempt_ms < e->reopen_backoff_ms) {
+                pthread_mutex_unlock(&pool->mu);
+                continue;
+            }
+            /* Claim the entry so a parallel pool_txrx doesn't try to
+             * use it while we re-open. */
+            e->in_use = 1;
+            e->last_reopen_attempt = t_now;
+            uint16_t app_handle = e->app_handle;
+            pthread_mutex_unlock(&pool->mu);
+
+            /* Force-close the stale local txrx_conn slot (PLC has
+             * already dropped the conn — we wipe our cached state to
+             * free the app_handle for re-open). */
+            (void)bp_txrx_force_close_local(cl, app_handle);
+
+            uint8_t epath2[2] = { 0x01, pool->slot };
+            bp_conn_spec_t cs2 = {
+                .app_handle   = app_handle,
+                .options      = 0,
+                .encoded_path = epath2,
+                .path_size    = 2,
+                .conn_params  = pool->conn_params,
+            };
+            int orc = bp_client_txrx_open(cl, &cs2, NULL, NULL);
+
+            pthread_mutex_lock(&pool->mu);
+            e->in_use = 0;
+            if (orc == BP_OK) {
+                e->dead = 0;
+                e->last_used = time(NULL);
+                e->reopen_backoff_ms = 1000;       /* reset for next time */
+                fprintf(stderr, "[pool keepalive] slot=%u entry %d auto-reopen OK\n",
+                        pool->slot, i);
+                pthread_cond_broadcast(&pool->cv);
+            } else {
+                /* Double the backoff; cap at 30 s. */
+                int next = e->reopen_backoff_ms * 2;
+                if (next > 30000) next = 30000;
+                e->reopen_backoff_ms = next;
+                fprintf(stderr, "[pool keepalive] slot=%u entry %d auto-reopen rc=%d "
+                                "— next attempt in %d ms\n",
+                        pool->slot, i, orc, next);
+            }
             pthread_mutex_unlock(&pool->mu);
         }
     }

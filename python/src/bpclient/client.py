@@ -482,6 +482,13 @@ class Client:
         self.message_send(msg)
         return msg.resp_data
 
+    def _force_close_local(self, app_handle: int) -> None:
+        """Wipe a single txrx_conn slot locally without sending FC.
+        Used by pool auto-reopen (v0.9.0 Phase 4) when the PLC has
+        already dropped the connection."""
+        with self._txrx_mu:
+            self._txrx_conns.pop(app_handle, None)
+
     def txrx_close(self, spec: ConnSpec) -> None:
         """Release the connection.  Sends Forward_Close using the
         cached identifiers, then evicts the state regardless of FC
@@ -614,15 +621,30 @@ class Client:
         with pool.inflight_lock:
             pool.inflight += 1
         try:
-            # Wait for a free entry; if pool is closing the queue will
-            # be drained and we re-check initialized.
+            # Acquire a non-dead entry.  If we pull a dead entry from
+            # the queue, put it back (keepalive auto-reopens) and try
+            # again.  Cap at pool.size to avoid spinning when all are
+            # dead.
+            idx = None
+            attempts = 0
             while True:
                 try:
                     idx = pool.free.get(timeout=0.5)
-                    break
                 except Exception:
                     if not pool.initialized:
                         raise BpNotOpen(f"pool for slot {slot} is closing")
+                    continue
+                if not pool.entries[idx].dead:
+                    break
+                # Return dead entry; keepalive will reopen it.
+                if pool.initialized:
+                    pool.free.put(idx)
+                attempts += 1
+                if attempts >= pool.size:
+                    raise BpGeneric(
+                        f"pool_txrx slot={slot}: all {pool.size} pool "
+                        "entries are dead (keepalive auto-reopen still "
+                        "in backoff)")
             try:
                 entry = pool.entries[idx]
                 cs = ConnSpec(
@@ -777,11 +799,60 @@ class Client:
                     self.txrx_msg(cs, identity_req, 64)
                 except Exception as e:
                     entry.dead = True
+                    entry.last_reopen = time.monotonic()
+                    if entry.reopen_backoff_ms == 0:
+                        entry.reopen_backoff_ms = 1000
                     print(f"[pool keepalive] slot={pool.slot} entry {i} "
                           f"ping failed: {e} — entry marked dead",
                           file=sys.stderr)
                 finally:
                     entry.last_used = time.monotonic()
+                    if pool.initialized:
+                        pool.free.put(i)
+
+            # v0.9.0 Phase 4 auto-reopen pass.  For each dead entry
+            # whose backoff has elapsed, force-close the stale local
+            # conn-state and re-issue Forward_Open with the same
+            # app_handle.  On success: dead=False, backoff resets.
+            for i, entry in enumerate(pool.entries):
+                if not entry.dead:
+                    continue
+                now2 = time.monotonic()
+                since_ms = (now2 - entry.last_reopen) * 1000
+                if since_ms < entry.reopen_backoff_ms:
+                    continue
+                # Claim the entry slot from free (non-blocking).  Skip
+                # this tick if we can't.
+                try:
+                    got = pool.free.get_nowait()
+                except Exception:
+                    continue
+                if got != i:
+                    if pool.initialized:
+                        pool.free.put(got)
+                    continue
+                entry.last_reopen = now2
+                self._force_close_local(entry.app_handle)
+                try:
+                    cs = ConnSpec(
+                        app_handle=entry.app_handle,
+                        encoded_path=bytes([0x01, pool.slot]),
+                        path_size=2,
+                        conn_params=pool.conn_params,
+                    )
+                    self.txrx_open(cs)
+                    entry.dead = False
+                    entry.last_used = time.monotonic()
+                    entry.reopen_backoff_ms = 1000
+                    print(f"[pool keepalive] slot={pool.slot} entry {i} "
+                          f"auto-reopen OK", file=sys.stderr)
+                except Exception as oe:
+                    nxt = min(entry.reopen_backoff_ms * 2, 30000)
+                    entry.reopen_backoff_ms = nxt
+                    print(f"[pool keepalive] slot={pool.slot} entry {i} "
+                          f"auto-reopen failed: {oe} — next attempt in "
+                          f"{nxt} ms", file=sys.stderr)
+                finally:
                     if pool.initialized:
                         pool.free.put(i)
 
@@ -804,6 +875,11 @@ class _PoolEntry:
     app_handle: int
     last_used: float
     dead: bool = False
+    # v0.9.0 Phase 4 — auto-reopen bookkeeping.  Keepalive retries
+    # a dead entry with exponential backoff (1 s → 2 s → 4 s → ...
+    # cap 30 s).
+    last_reopen: float = 0.0
+    reopen_backoff_ms: int = 0
 
 
 class _Pool:

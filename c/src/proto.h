@@ -101,7 +101,14 @@ struct bp_pool_entry {
     uint16_t app_handle;        /* matches entry in txrx_conns table */
     time_t   last_used;         /* updated on every txrx; used by keepalive */
     int      dead;              /* 1 = LFO failed during pool_open recovery,
-                                 *     or keepalive saw a fatal transport error */
+                                 *     or keepalive saw a fatal transport error;
+                                 *     keepalive auto-reopens (v0.9.0 Phase 4) */
+    /* Auto-reopen bookkeeping (v0.9.0 Phase 4).  Keepalive retries a
+     * dead entry with exponential backoff (1s → 2s → 4s → ... cap 30s);
+     * on success: dead=0, backoff_ms resets to initial, cv broadcast
+     * so a waiting pool_txrx caller can pick up the revived entry. */
+    time_t   last_reopen_attempt;
+    int      reopen_backoff_ms;
 };
 
 struct bp_pool {
@@ -173,6 +180,12 @@ int                  bp_tag_cache_reset_after_build(bp_client_t *cl,
  * LFO/FC rejections. */
 void bp_record_cip_error(bp_client_t *cl, uint8_t svc, uint8_t status,
                           uint16_t ext_status, uint8_t slot);
+
+/* Force-close a txrx_conn slot locally without sending Forward_Close.
+ * Used by pool auto-reopen (v0.9.0 Phase 4) when the PLC has already
+ * dropped the connection (keepalive ping failed).  Returns BP_OK if
+ * a slot matched; BP_ERR_NOT_OPEN if none. */
+int bp_txrx_force_close_local(bp_client_t *cl, uint16_t app_handle);
 
 struct bp_tagdb {
     bp_client_t *client;

@@ -41,6 +41,10 @@ type poolEntry struct {
 	appHandle uint16
 	lastUsed  atomic.Int64 // unix-nanoseconds; updated on every release
 	dead      atomic.Bool
+	// v0.9.0 Phase 4 — auto-reopen bookkeeping.  Keepalive retries a
+	// dead entry with exponential backoff (1s → 2s → 4s → ... cap 30s).
+	lastReopenNs   atomic.Int64
+	reopenBackoffMs atomic.Int64
 }
 
 // poolIdentityReq is the keepalive ping body — Identity Object
@@ -161,11 +165,29 @@ func (c *Client) PoolTxRx(slot uint8, req []byte, resp []byte, respCap uint16) (
 	p.inflight.Add(1)
 	defer p.inflight.Done()
 
+	// Acquire a non-dead entry.  If we pull a dead entry from the
+	// free channel, put it back (the keepalive goroutine will
+	// auto-reopen it) and try again.  Cap retries at size to avoid
+	// spinning when all entries are dead.
 	var idx int
-	select {
-	case idx = <-p.free:
-	case <-p.stop:
-		return 0, ErrNotOpen
+	for attempt := 0; ; attempt++ {
+		select {
+		case idx = <-p.free:
+		case <-p.stop:
+			return 0, ErrNotOpen
+		}
+		if !p.entries[idx].dead.Load() {
+			break
+		}
+		// Return the dead entry to free for the keepalive thread.
+		select {
+		case p.free <- idx:
+		case <-p.stop:
+			return 0, ErrNotOpen
+		}
+		if attempt+1 >= int(p.size) {
+			return 0, fmt.Errorf("ocxbp: PoolTxRx: all %d pool entries are dead (keepalive auto-reopen still in backoff)", p.size)
+		}
 	}
 	defer func() {
 		p.entries[idx].lastUsed.Store(time.Now().UnixNano())
@@ -378,11 +400,102 @@ func (p *pool) keepaliveLoop(c *Client) {
 			e.lastUsed.Store(time.Now().UnixNano())
 			if err != nil {
 				e.dead.Store(true)
+				// Initial backoff = 1 s.  Auto-reopen pass (below) takes
+				// over from here.
+				e.lastReopenNs.Store(time.Now().UnixNano())
+				if e.reopenBackoffMs.Load() == 0 {
+					e.reopenBackoffMs.Store(1000)
+				}
 				fmt.Fprintf(os.Stderr,
 					"[pool keepalive] slot=%d entry %d ping failed: %v — entry marked dead\n",
 					p.slot, i, err)
 			}
 			// Return entry to free pool.
+			select {
+			case p.free <- claimed:
+			case <-p.stop:
+				return
+			}
+		}
+
+		// v0.9.0 Phase 4: auto-reopen pass.  For each dead entry whose
+		// backoff has elapsed, force-close the stale local conn state
+		// and re-issue Forward_Open with the same app_handle.  On
+		// success: dead=false, backoff resets, free-channel gets the
+		// entry back so a waiting PoolTxRx picks it up.  On failure:
+		// backoff doubles, capped at 30 s.
+		for i := 0; i < int(p.size); i++ {
+			e := p.entries[i]
+			if e == nil || !e.dead.Load() {
+				continue
+			}
+			now := time.Now().UnixNano()
+			sinceMs := (now - e.lastReopenNs.Load()) / int64(time.Millisecond)
+			if sinceMs < e.reopenBackoffMs.Load() {
+				continue
+			}
+			// Claim the entry slot in free so a parallel PoolTxRx
+			// doesn't grab it mid-reopen.  A dead entry is normally
+			// already not in `free` (PoolTxRx returns it to free even
+			// when dead, but takes the dead-skip path on next acquire);
+			// be defensive and try a non-blocking receive — if we can't
+			// claim it, skip this round.
+			var claimed int = -1
+			select {
+			case got := <-p.free:
+				if got == i {
+					claimed = i
+				} else {
+					select {
+					case p.free <- got:
+					case <-p.stop:
+						return
+					}
+				}
+			default:
+				// Entry not in free queue (race).  Defer to next tick.
+			}
+			if claimed < 0 {
+				continue
+			}
+			e.lastReopenNs.Store(now)
+
+			// Force-close the stale local conn-state slot; the PLC has
+			// already dropped this conn so no Forward_Close on the wire.
+			c.forceCloseLocal(e.appHandle)
+
+			epath := []byte{0x01, p.slot}
+			cs := &ConnSpec{
+				AppHandle:   e.appHandle,
+				EncodedPath: epath,
+				PathSize:    2,
+				ConnParams:  p.connParams,
+			}
+			_, _, orc := c.TxRxOpen(cs)
+			if orc == nil {
+				e.dead.Store(false)
+				e.lastUsed.Store(time.Now().UnixNano())
+				e.reopenBackoffMs.Store(1000)
+				fmt.Fprintf(os.Stderr,
+					"[pool keepalive] slot=%d entry %d auto-reopen OK\n",
+					p.slot, i)
+			} else {
+				next := e.reopenBackoffMs.Load() * 2
+				if next > 30000 {
+					next = 30000
+				}
+				e.reopenBackoffMs.Store(next)
+				fmt.Fprintf(os.Stderr,
+					"[pool keepalive] slot=%d entry %d auto-reopen failed: %v — next attempt in %d ms\n",
+					p.slot, i, orc, next)
+			}
+			// Return the entry to free regardless.  If dead, PoolTxRx
+			// would skip via the dead check; but we don't have that
+			// check today (the channel just hands out indices).  For
+			// v0.9.0 simplicity we accept that PoolTxRx may briefly
+			// hand back a still-dead entry and let TxRxMsg surface the
+			// real error.  TODO if this becomes noisy: gate PoolTxRx
+			// on entry.dead.Load().
 			select {
 			case p.free <- claimed:
 			case <-p.stop:

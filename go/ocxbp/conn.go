@@ -221,6 +221,16 @@ func (c *Client) TxRxMsg(spec *ConnSpec, req []byte, resp []byte, respCap uint16
 	return msg.RespLen, nil
 }
 
+// forceCloseLocal wipes a single txrxMap entry locally without sending
+// Forward_Close.  Used by pool auto-reopen (v0.9.0 Phase 4) when the
+// PLC has already dropped the connection.  No error if no entry
+// matches — the caller is just freeing the app_handle slot.
+func (c *Client) forceCloseLocal(appHandle uint16) {
+	c.txrxMu.Lock()
+	delete(c.txrxMap, appHandle)
+	c.txrxMu.Unlock()
+}
+
 // TxRxClose releases the connection.  Sends Forward_Close using the
 // cached identifiers, then evicts the state from the Client's
 // connection map regardless of FC outcome (so the slot becomes
