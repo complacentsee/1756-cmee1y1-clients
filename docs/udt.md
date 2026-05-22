@@ -3,6 +3,15 @@
 This SDK fully supports reading and writing Logix UDTs ("structs"
 in CIP terminology). Three independent access patterns work today:
 
+> The C API names below (`bp_tagdb_*`) have direct equivalents in
+> the Go and Python SDKs:
+> `bp_tagdb_get_struct_info` ↔ `(*TagDB).GetStructInfo` (Go) ↔
+> `TagDB.get_struct_info` (Python); same shape, same return values.
+> Member-access via `parent.member` tag strings works identically
+> across all three. The Logix `STRING` family is a UDT and gets
+> first-class helpers — `bp_tagdb_read_string` / `(*TagDB).ReadString`
+> / `TagDB.read_string` — covered below.
+
 | Approach | Suitable for | API |
 |----------|--------------|-----|
 | **Schema discovery + dotted member access** (recommended) | UDTs whose layout you don't know at compile-time | `bp_tagdb_get_struct_info` + `bp_tagdb_get_struct_member` then `bp_tagdb_read_*` with `parent.member` tag names |

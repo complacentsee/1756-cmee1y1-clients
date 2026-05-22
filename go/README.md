@@ -41,6 +41,12 @@ func main() {
     v, _ := db.ReadDINT("OCX_TEST")
     db.WriteDINT("OCX_TEST", int32(uint32(0xDEADBEEF)))
     db.WriteDINT("OCX_TEST", v) // restore
+
+    // Arrays + STRING (v0.6.0):
+    arr, _ := db.ReadDINTArray("Test_DINT_Arr", 10)              // []int32
+    db.WriteBOOLArray("Test_Bool_Arr", []bool{true, false, true})
+    name, _ := db.ReadString("Test_STRING")                       // string
+    _ = arr; _ = name
 }
 ```
 
@@ -71,7 +77,8 @@ runtime (carries glibc + dynamic loader for the cgo POSIX-sem wrapper).
 
 | Tool           | Mirror of |
 |---|---|
-| `tagtest`      | Canonical Read/Write/Readback round-trip |
+| `tagtest`      | Canonical DINT Read/Write/Readback round-trip |
+| `typetest`     | Cross-type sweep (every scalar + STRING + arrays + BOOL[] + 2-D/3-D) |
 | `msgprobe`     | Raw `OCXcip_MessageSend` + response hexdump |
 | `identity`     | Local + remote Identity dump |
 | `connidentity` | Class-3 connected Identity (NOT FUNCTIONAL on cm1756) |
@@ -120,8 +127,9 @@ its own slot across all 16 slots, gated by the cross-process
 
 ## Status
 
-v0.5.0. Outbound tag I/O is fully functional. The class-3
-connected `TxRx*` methods are kept for API parity but return
-engine code `0x1001` on cm1756 — see
+v0.6.0. Outbound tag I/O is fully functional including the
+typed-array + BOOL[] + STRING surface (v0.6.0 parity bump). The
+class-3 connected `TxRx*` methods are kept for API parity but
+return engine code `0x1001` on cm1756 — see
 [`docs/protocol.md`](../docs/protocol.md) "Connected messaging
 — open issues".

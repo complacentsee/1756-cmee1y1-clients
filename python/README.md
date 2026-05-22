@@ -22,6 +22,11 @@ with bpclient.Client() as c:
         db.write_dint("OCX_TEST", 0xCAFEBABE - (1 << 32))
         assert db.read_dint("OCX_TEST") == 0xCAFEBABE - (1 << 32)
         db.write_dint("OCX_TEST", v)  # restore
+
+        # Arrays + STRING (v0.6.0):
+        arr = db.read_dint_array("Test_DINT_Arr", 10)
+        db.write_bool_array("Test_Bool_Arr", [True, False, True])
+        name = db.read_string("Test_STRING")
     finally:
         db.close()
 ```
@@ -49,7 +54,8 @@ py runprobe.py --image bpclient-python-tagtest:dev tagtest
 
 | Tool           | Mirror of |
 |---|---|
-| `tagtest`      | Canonical Read/Write/Readback round-trip |
+| `tagtest`      | Canonical DINT Read/Write/Readback round-trip |
+| `typetest`     | Cross-type sweep (every scalar + STRING + arrays + BOOL[] + 2-D/3-D) |
 | `msgprobe`     | Raw `OCXcip_MessageSend` + response hexdump |
 | `identity`     | Local + remote Identity dump |
 | `connidentity` | Class-3 connected Identity (NOT FUNCTIONAL on cm1756) |
@@ -78,7 +84,8 @@ BP_PLC_PATH=P:1,S:2 pytest tests/                      # + end-to-end
 
 ## Status
 
-Phase 5 (2026-05). Outbound tag I/O is fully functional. The
+v0.6.0. Outbound tag I/O is fully functional including the
+typed-array + BOOL[] + STRING surface (v0.6.0 parity bump). The
 class-3 connected `TxRx*` methods are kept for API parity but
 return engine code `0x1001` on cm1756 — see
 [`docs/protocol.md`](../docs/protocol.md) "Connected messaging

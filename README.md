@@ -16,15 +16,15 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.5.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.5.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.5.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.6.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.6.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.6.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
-All three pass the canonical `tagtest` (read / write / readback against
-`OCX_TEST` on an L85) and the `msgprobe` slot-sweep (Identity
-Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal)
-**byte-identically** — see [`runprobe.py`](runprobe.py) for the
-shared cross-language runner.
+All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
+Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
+and the `typetest` cross-type sweep (scalars × 11 + STRING + DINT[1-D]
++ BOOL[] + DINT[2-D] + DINT[3-D]) **byte-identically** — see
+[`runprobe.py`](runprobe.py) for the shared cross-language runner.
 
 The class-3 connected `TxRx*` methods are kept in all three SDKs for
 API parity but return engine code `0x1001` on cm1756 — the
@@ -75,8 +75,36 @@ with bpclient.Client() as c:
 
 All three speak the same wire protocol with the same semantics and
 the same container plumbing. Use [`runprobe.py`](runprobe.py) to
-diff the output of `tagtest` / `msgprobe` across languages and
-confirm byte equivalence.
+diff the output of `tagtest` / `typetest` / `msgprobe` across
+languages and confirm byte equivalence.
+
+### Arrays + STRING
+
+v0.6.0 ships full array + Logix-STRING parity in every SDK:
+
+```go
+// Go
+vals, _ := db.ReadDINTArray("Test_DINT_Arr", 10)         // []int32
+db.WriteREALArray("Test_REAL_Arr", []float32{1, 2, 3, 4, 5})
+db.WriteBOOLArray("Test_Bool_Arr", []bool{true, false, ...})
+name, _ := db.ReadString("Test_STRING")                   // string
+db.WriteString("Test_STRING", "hello")
+```
+
+```python
+# Python
+vals = db.read_dint_array("Test_DINT_Arr", 10)            # list[int]
+db.write_real_array("Test_REAL_Arr", [1.0, 2.0, 3.0, 4.0, 5.0])
+db.write_bool_array("Test_Bool_Arr", [True, False, ...])
+name = db.read_string("Test_STRING")                       # str
+db.write_string("Test_STRING", "hello")
+```
+
+Logix `BOOL[]` is packed as `ceil(N/32)` DWORDs on the wire (CIP type
+`0xD3`); the helpers handle pack/unpack transparently. STRING reads
+both `tag.LEN` and `tag.DATA` in two IPC round-trips and works with
+the default `STRING`, `STRING_32`, `STRING_512`, and any LEN+DATA-
+shaped UDT.
 
 ## Quick start (build + run on the HMI)
 
@@ -113,7 +141,8 @@ Override the default `tagtest` entrypoint via Docker's
 
 | Tool | Purpose |
 |---|---|
-| `tagtest`      | Canonical read / write / readback round-trip |
+| `tagtest`      | Canonical DINT read / write / readback round-trip |
+| `typetest`     | Cross-type sweep — every scalar + STRING + 1-D/2-D/3-D arrays + BOOL[] |
 | `msgprobe`     | Raw `OCXcip_MessageSend` invocation + response hexdump |
 | `identity`     | Local + remote Identity dump |
 | `connidentity` | Class-3 connected Identity (NOT FUNCTIONAL on cm1756) |
