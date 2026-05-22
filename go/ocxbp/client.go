@@ -58,7 +58,9 @@ func Open() (*Client, error) {
 
 // Close releases the IPC. Safe to call on nil.  Any open pools are
 // closed first (with their Forward_Close sends to the PLC and their
-// keepalive goroutines stopped) before tearing down the IPC layer.
+// keepalive goroutines stopped), then the engine session is released
+// via OCXcip_Close (so bpServer's session table doesn't accumulate
+// dead entries), then the IPC layer is torn down.
 func (c *Client) Close() {
 	if c == nil {
 		return
@@ -71,6 +73,9 @@ func (c *Client) Close() {
 			_ = c.PoolClose(uint8(s))
 		}
 	}
+	// Best-effort — if no session was open the engine returns
+	// ErrNotOpen which we discard.
+	_ = c.CloseSession()
 	c.shm.Close()
 	c.shm = nil
 }
@@ -99,4 +104,20 @@ func (c *Client) OpenSession() (uint32, error) {
 		TimeoutMs:   5000,
 	})
 	return handle, translateCallErr(err)
+}
+
+// CloseSession dispatches OCXcip_Close to release the engine-side
+// session opened by OpenSession.  Client.Close calls this
+// automatically; explicit invocation is only needed if you want to
+// keep the SDK's IPC handle alive across multiple sessions.
+func (c *Client) CloseSession() error {
+	if c == nil {
+		return ErrNullArg
+	}
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnClose,
+		PayloadSize: cip.SizeClose,
+		TimeoutMs:   5000,
+	})
+	return translateCallErr(err)
 }

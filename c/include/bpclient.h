@@ -144,6 +144,17 @@ void bp_client_close(bp_client_t *client);
  */
 int  bp_client_open_session(bp_client_t *client, uint32_t *out_handle);
 
+/* bp_client_close_session
+ *   Sends an OCXcip_Close request.  Releases the engine-side session
+ *   state opened by bp_client_open_session so bpServer's session
+ *   table doesn't accumulate dead entries (eventually returning
+ *   engine errorcode 8 = "session table full" to new clients).
+ *
+ *   bp_client_close calls this automatically; explicit invocation
+ *   is only needed if you want to keep the SDK's IPC handle alive
+ *   across multiple sessions on the same process. */
+int  bp_client_close_session(bp_client_t *client);
+
 /* ============================================================
  * Unconnected (UCMM) CIP messaging — bp_client_message_send
  *

@@ -15,6 +15,9 @@ const (
 	FnOpen                  = "OCXcip_Open"
 	SizeOpen         uint32 = 0x80
 
+	FnClose                  = "OCXcip_Close"
+	SizeClose         uint32 = 0x78
+
 	FnCreateTagDbHandle        = "OCXcip_CreateTagDbHandle"
 	SizeCreateTagDbHandle uint32 = 0x180
 

@@ -94,6 +94,12 @@ class Client:
                 self.pool_close(s)
             except Exception:
                 pass
+        # Release the engine session so bpServer's session table
+        # doesn't accumulate dead entries (best-effort).
+        try:
+            self.close_session()
+        except Exception:
+            pass
         self._raw.close()
 
     def __enter__(self) -> "Client":
@@ -116,6 +122,13 @@ class Client:
 
         self._raw.call("OCXcip_Open", 0x80, read=read, timeout_ms=5000)
         return handle
+
+    def close_session(self) -> None:
+        """OCXcip_Close: release the engine-side session opened by
+        ``open_session``.  ``Client.close`` calls this automatically;
+        explicit invocation is only needed if you want to keep the
+        SDK's IPC handle alive across multiple sessions."""
+        self._raw.call("OCXcip_Close", 0x78, timeout_ms=5000)
 
     # ============================================================
     # Tag-DB lifecycle

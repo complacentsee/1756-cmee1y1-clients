@@ -99,6 +99,12 @@ void bp_client_close(bp_client_t *c) {
             (void)bp_client_pool_close(c, (uint8_t)s);
         }
     }
+    /* Release the engine session if open_session was called.  Without
+     * this, bpServer's session table accumulates dead entries from
+     * each process exit until the table fills (errorcode 8 on the
+     * next process's CreateTagDbHandle).  Best-effort — if no session
+     * is open the engine returns NOT_OPEN which we ignore. */
+    (void)bp_client_close_session(c);
     for (int i = 0; i < BP_SLOT_COUNT; i++) {
         if (c->sem_req[i])  { sem_close(c->sem_req[i]);  c->sem_req[i]  = NULL; }
         if (c->sem_resp[i]) { sem_close(c->sem_resp[i]); c->sem_resp[i] = NULL; }
@@ -300,4 +306,17 @@ int bp_client_open_session(bp_client_t *c, uint32_t *out_handle) {
     int rc = bp_client_call(c, &spec);
     if (rc == BP_OK && out_handle) *out_handle = handle;
     return rc;
+}
+
+int bp_client_close_session(bp_client_t *c) {
+    if (!c) return BP_ERR_NULL_ARG;
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_Close",
+        .payload_size = 0x78,
+        .fill_payload = NULL,
+        .read_reply   = NULL,
+        .timeout_ms   = 5000,
+        .user         = NULL,
+    };
+    return bp_client_call(c, &spec);
 }

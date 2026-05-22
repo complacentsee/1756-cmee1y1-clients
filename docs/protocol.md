@@ -194,6 +194,26 @@ In practice the session_handle is bookkeeping — the wrapper IPC
 tracks state via slot ownership, not the handle. But the call must
 happen and must succeed before any other OCXcip_* call works.
 
+### `OCXcip_Close` — release the session (v0.9.0+)
+
+```
+fn_name        = "OCXcip_Close"
+payload_size   = 0x78
+
+REQUEST PAYLOAD:  (none — entire 0x78 bytes is the slot header)
+RESPONSE PAYLOAD: errorcode only
+```
+
+Releases the engine-side session opened by `OCXcip_Open`.  Without
+this, bpServer's session table accumulates a dead entry per process
+exit; once full, the next process's `OCXcip_CreateTagDbHandle`
+returns engine errorcode 8 ("session table full") and the only
+recovery is restarting bpServer.
+
+The SDK's `bp_client_close` / `Client.Close()` / `client.close()`
+methods call this automatically.  Wire address in the OEM library:
+`OCXcip_Close` at `0x0010ACF4` (RE'd from `libocxbpapi-w.so`).
+
 ### `OCXcip_CreateTagDbHandle` — get a per-PLC tag DB handle
 
 ```
