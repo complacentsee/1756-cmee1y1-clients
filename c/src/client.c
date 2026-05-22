@@ -165,6 +165,13 @@ int bp_client_call(bp_client_t *c, const bp_call_spec_t *spec) {
     bp_st_u32(p + BP_HDR_SLOT_NUMBER + 4, 0);
     /* Clear +0x68..+0x77 (16 reserved bytes) */
     memset(p + 0x68, 0, 0x10);
+    /* Zero the entire payload + response area.  The engine only
+     * writes the fields it cares about; bytes it doesn't touch
+     * retain whatever was in the slot from previous calls.  Zeroing
+     * here makes reads deterministic — unpopulated fields read as 0
+     * instead of stale neighbor data. */
+    memset(p + BP_HDR_PAYLOAD_START, 0,
+           BP_SLOT_STRIDE - BP_HDR_PAYLOAD_START);
 
     /* Payload */
     if (spec->fill_payload) spec->fill_payload(p, spec->user);

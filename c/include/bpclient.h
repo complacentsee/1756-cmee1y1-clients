@@ -141,6 +141,68 @@ int      bp_symbol_is_struct(const bp_symbol_info_t *info);  /* 1 = UDT,   0 = a
 uint16_t bp_symbol_type_code(const bp_symbol_info_t *info);  /* data_type & 0x1FFF */
 
 /* ============================================================
+ * UDT (Structure) discovery
+ *
+ * For a tag with bp_symbol_is_struct(info) == 1, info->struct_type
+ * is the index into the PLC's struct template table.  Use these
+ * functions to enumerate the template's members so you can build
+ * dotted accessors at runtime.
+ *
+ * Members are addressed by index 0..(n_members - 1).  Each member's
+ * `name` field (combined with the parent tag name as
+ * "parent.member") can be passed directly to ReadDINT/ReadString
+ * etc.
+ *
+ * Nested UDTs: if a member's struct_id is non-zero, it's itself a
+ * UDT; recurse with that struct_id to enumerate its members.
+ * ============================================================ */
+
+typedef struct {
+    char     name[40];      /* UDT name, NUL-terminated */
+    uint32_t data_type;     /* wire-level data_type for tags of this struct
+                             * (e.g. 0x4527 for a 5-member user UDT;
+                             * 0x0fce for the standard STRING family) */
+    uint32_t byte_size;     /* total struct size in bytes */
+    uint32_t n_members;     /* number of members */
+} bp_struct_info_t;
+
+typedef struct {
+    char     name[44];      /* member name, NUL-terminated */
+    uint16_t data_type;     /* CIP type code (BP_TYPE_*) for atomic
+                             * members; 0x0fxx for struct-typed members */
+    uint16_t struct_id;     /* if non-zero, this member is a UDT —
+                             * recurse with this id for its layout */
+    uint32_t byte_size;     /* member size in bytes (per element if array) */
+    uint32_t offset;        /* offset within parent struct */
+    uint32_t array_count;   /* 0 if scalar; N if SINT[N], DINT[N], etc.
+                             * For 2+ dim arrays only the first dim is
+                             * surfaced; we haven't characterized higher
+                             * dims yet — see docs/udt.md */
+    uint8_t  flags;         /* observed values:
+                             *   0x45 = atomic scalar
+                             *   0x41 = struct member
+                             *   0x49 = atomic array
+                             * Bit 0x08 in flags = "array" indicator. */
+} bp_struct_member_info_t;
+
+/* Member-info accessors */
+static inline int bp_member_is_array (const bp_struct_member_info_t *m) {
+    return m ? (int)((m->flags & 0x08) != 0) : 0;
+}
+static inline int bp_member_is_struct(const bp_struct_member_info_t *m) {
+    return m ? (int)(m->struct_id != 0) : 0;
+}
+
+/* bp_tagdb_get_struct_info — fetch a UDT template descriptor by id. */
+int bp_tagdb_get_struct_info(bp_tagdb_t *db, uint16_t struct_id,
+                              bp_struct_info_t *out_info);
+
+/* bp_tagdb_get_struct_member — fetch one member descriptor by index. */
+int bp_tagdb_get_struct_member(bp_tagdb_t *db, uint16_t struct_id,
+                                uint16_t member_index,
+                                bp_struct_member_info_t *out_member);
+
+/* ============================================================
  * Tag access (read/write)
  * ============================================================ */
 

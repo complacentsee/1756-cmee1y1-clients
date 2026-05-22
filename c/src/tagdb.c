@@ -158,6 +158,126 @@ uint16_t bp_symbol_type_code(const bp_symbol_info_t *info) {
     return info ? (uint16_t)(info->data_type & 0x1FFFu) : 0;
 }
 
+/* ============================================================
+ * OCXcip_GetStructInfo + OCXcip_GetStructMbrInfo
+ *
+ * Wire-protocol layouts derived empirically against L85E firmware
+ * ~36.11 via the cm1756.  See docs/protocol.md for the spec; see
+ * the examples/structprobe.c output captured during development
+ * for the raw-byte verification.
+ * ============================================================ */
+
+typedef struct {
+    uint32_t handle;
+    uint16_t struct_id;
+    bp_struct_info_t *out;
+} si_ctx_t;
+
+static void si_fill(uint8_t *slot, void *user) {
+    si_ctx_t *c = user;
+    bp_st_u32(slot + 0x78, c->handle);
+    bp_st_u16(slot + 0x7C, c->struct_id);
+}
+
+static void si_read(uint8_t *slot, void *user) {
+    si_ctx_t *c = user;
+    /* StructInfo response lives at slot+0x80, 56 bytes total.
+     * Empirically determined layout (see examples/structprobe.c
+     * runtime captures during RE):
+     *   +0x00 char[40] name (NUL-terminated; trailing bytes may contain
+     *                        leftover slot data — read only up to NUL)
+     *   +0x28 (4 bytes) (zero in observed runs; likely padding)
+     *   +0x2C uint32    data_type   (wire-level, e.g. 0x4527)
+     *   +0x30 uint32    byte_size   (struct's total size)
+     *   +0x34 uint16    (template handle / CRC; we don't surface)
+     *   +0x36 uint16    n_members
+     */
+    const uint8_t *p = slot + 0x80;
+    memset(c->out, 0, sizeof(*c->out));
+    size_t nl = 0;
+    while (nl < 39 && p[nl] != 0) nl++;
+    memcpy(c->out->name, p, nl);
+    c->out->name[nl] = 0;
+    c->out->data_type = bp_ld_u32(p + 0x2C);
+    c->out->byte_size = bp_ld_u32(p + 0x30);
+    c->out->n_members = bp_ld_u16(p + 0x36);
+}
+
+int bp_tagdb_get_struct_info(bp_tagdb_t *db, uint16_t struct_id,
+                              bp_struct_info_t *out_info) {
+    if (!db || !out_info) return BP_ERR_NULL_ARG;
+    si_ctx_t ctx = { .handle = db->handle, .struct_id = struct_id, .out = out_info };
+    bp_call_spec_t spec = {
+        .fn_name = "OCXcip_GetStructInfo",
+        .payload_size = 0xB8,
+        .fill_payload = si_fill,
+        .read_reply   = si_read,
+        .timeout_ms   = 5000,
+        .user         = &ctx,
+    };
+    return bp_client_call(db->client, &spec);
+}
+
+typedef struct {
+    uint32_t handle;
+    uint16_t struct_id;
+    uint16_t member_index;
+    bp_struct_member_info_t *out;
+} smi_ctx_t;
+
+static void smi_fill(uint8_t *slot, void *user) {
+    smi_ctx_t *c = user;
+    bp_st_u32(slot + 0x78, c->handle);
+    bp_st_u16(slot + 0x7C, c->struct_id);
+    bp_st_u16(slot + 0x7E, c->member_index);
+}
+
+static void smi_read(uint8_t *slot, void *user) {
+    smi_ctx_t *c = user;
+    /* StructMemberInfo lives at slot+0x80, 76 bytes:
+     *  +0x00 char[44] name (NUL-terminated)
+     *  +0x2C uint16   data_type
+     *  +0x30 uint16   struct_id (non-zero if member is a UDT)
+     *  +0x34 uint32   byte_size
+     *  +0x38 uint32   offset within parent
+     *  +0x3C uint32   dim0
+     *  +0x40 uint32   dim1
+     *  +0x44 uint32   flags
+     */
+    const uint8_t *p = slot + 0x80;
+    memset(c->out, 0, sizeof(*c->out));
+    size_t nl = 0;
+    while (nl < 43 && p[nl] != 0) nl++;
+    memcpy(c->out->name, p, nl);
+    c->out->name[nl] = 0;
+    c->out->data_type   = bp_ld_u16(p + 0x2C);
+    c->out->struct_id   = bp_ld_u16(p + 0x30);
+    c->out->byte_size   = bp_ld_u32(p + 0x34);
+    c->out->offset      = bp_ld_u32(p + 0x38);
+    /* p+0x3C is zero in all observed cases — reserved or 2nd dim */
+    c->out->array_count = bp_ld_u32(p + 0x40);  /* N for SINT[N] / DINT[N] etc.; 0 if scalar */
+    c->out->flags       = p[0x44];              /* only low byte is meaningful */
+}
+
+int bp_tagdb_get_struct_member(bp_tagdb_t *db, uint16_t struct_id,
+                                uint16_t member_index,
+                                bp_struct_member_info_t *out_member) {
+    if (!db || !out_member) return BP_ERR_NULL_ARG;
+    smi_ctx_t ctx = {
+        .handle = db->handle, .struct_id = struct_id,
+        .member_index = member_index, .out = out_member,
+    };
+    bp_call_spec_t spec = {
+        .fn_name = "OCXcip_GetStructMbrInfo",
+        .payload_size = 0xD0,
+        .fill_payload = smi_fill,
+        .read_reply   = smi_read,
+        .timeout_ms   = 5000,
+        .user         = &ctx,
+    };
+    return bp_client_call(db->client, &spec);
+}
+
 int bp_tagdb_symbol_at(bp_tagdb_t *db, uint16_t index,
                        bp_symbol_info_t *out_info) {
     if (!db || !out_info) return BP_ERR_NULL_ARG;
