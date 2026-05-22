@@ -24,6 +24,7 @@ set(LIB_SOURCES
     src/identity.c
     src/module.c
     src/conn.c
+    src/pool.c
 )
 
 # Shared library
@@ -112,6 +113,12 @@ target_link_libraries(connidentity PRIVATE bpclient pthread rt)
 add_executable(conntest examples/conntest.c)
 target_link_libraries(conntest PRIVATE bpclient pthread rt)
 
+# Example: pooltest — v0.8.0 connection-pool + keepalive validator
+# (fans out M workers × N requests through a pre-opened pool; also
+# verifies pool_open/close lifecycle and the keepalive thread).
+add_executable(pooltest examples/pooltest.c)
+target_link_libraries(pooltest PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -140,5 +147,6 @@ install(TARGETS
             modutil
             connidentity
             conntest
+            pooltest
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

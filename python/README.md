@@ -60,6 +60,7 @@ py runprobe.py --image bpclient-python-tagtest:dev tagtest
 | `identity`     | Local + remote Identity dump |
 | `connidentity` | Class-3 connected Identity (LFO + bare Identity + FC) |
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
+| `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |

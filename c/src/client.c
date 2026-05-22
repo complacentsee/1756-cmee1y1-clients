@@ -53,6 +53,8 @@ int bp_client_open(bp_client_t **out_client) {
     pthread_mutex_init(&c->txrx_mu, NULL);
     /* Last-recorded CIP-layer error (BP_ERR_CIP_STATUS path) */
     pthread_mutex_init(&c->cip_err_mu, NULL);
+    /* Per-slot connection pools (v0.8.0 Phase 2) */
+    pthread_mutex_init(&c->pools_mu, NULL);
 
     /* Open the shm-lock semaphore */
     c->sem_shmlock = sem_open(BP_SEM_SHMLOCK, 0);
@@ -87,6 +89,14 @@ fail:
 
 void bp_client_close(bp_client_t *c) {
     if (!c) return;
+    /* Close any open pools first so keepalive threads stop before we
+     * tear down the IPC.  Each pool_close also sends Forward_Close
+     * to the PLC for every pool entry. */
+    for (int s = 0; s < BP_POOL_MAX_SLOTS; s++) {
+        if (c->pools[s].initialized) {
+            (void)bp_client_pool_close(c, (uint8_t)s);
+        }
+    }
     for (int i = 0; i < BP_SLOT_COUNT; i++) {
         if (c->sem_req[i])  { sem_close(c->sem_req[i]);  c->sem_req[i]  = NULL; }
         if (c->sem_resp[i]) { sem_close(c->sem_resp[i]); c->sem_resp[i] = NULL; }
@@ -97,6 +107,7 @@ void bp_client_close(bp_client_t *c) {
     pthread_mutex_destroy(&c->scan_mu);
     pthread_mutex_destroy(&c->txrx_mu);
     pthread_mutex_destroy(&c->cip_err_mu);
+    pthread_mutex_destroy(&c->pools_mu);
     free(c);
 }
 

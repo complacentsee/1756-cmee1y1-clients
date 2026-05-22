@@ -1,0 +1,320 @@
+// SPDX-License-Identifier: MIT
+
+package ocxbp
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// PoolSpec configures a per-slot connection pool.  Mirrors C's
+// bp_pool_spec_t and Python's PoolSpec.
+//
+// Recommended defaults: Size=4, KeepaliveMs=10000, ConnParams=0.
+type PoolSpec struct {
+	Slot        uint8  // backplane slot 0..0x13
+	Size        uint8  // connections to keep open (1..PoolMaxSize)
+	KeepaliveMs uint16 // idle ping interval; 0 = disabled
+	ConnParams  uint16 // O→T/T→O size in bytes; 0 = SDK default 4000
+}
+
+// pool is the internal per-slot pool state.  One per slot per Client;
+// indexed by slot in Client.pools.
+type pool struct {
+	slot        uint8
+	size        uint8
+	keepaliveMs uint16
+	connParams  uint16
+	entries     []*poolEntry
+	free        chan int          // buffered; values are entry indices
+	stop        chan struct{}     // closed by PoolClose
+	wg          sync.WaitGroup    // tracks keepalive goroutine
+	inflight    sync.WaitGroup    // tracks in-flight PoolTxRx
+	initialized atomic.Bool
+}
+
+type poolEntry struct {
+	appHandle uint16
+	lastUsed  atomic.Int64 // unix-nanoseconds; updated on every release
+	dead      atomic.Bool
+}
+
+// poolIdentityReq is the keepalive ping body — Identity Object
+// GetAttributeAll on class 0x01 instance 1.  Same bytes the sibling
+// apex2d daemon uses (apex2_cip_connection.c:3301-3303).
+var poolIdentityReq = []byte{0x01, 0x02, 0x20, 0x01, 0x24, 0x01}
+
+// PoolOpen pre-opens spec.Size class-3 connections to spec.Slot and
+// starts a keepalive goroutine if KeepaliveMs > 0.  Only one pool per
+// slot per Client; reopening without PoolClose first returns an error.
+//
+// On partial failure (some opened, some not), the partial state is
+// rolled back (Forward_Close on each opened entry) and the underlying
+// error is returned.
+func (c *Client) PoolOpen(spec *PoolSpec) error {
+	if c == nil || spec == nil {
+		return ErrNullArg
+	}
+	if spec.Slot > MsgMaxSlot {
+		return ErrSlotTooLarge
+	}
+	if spec.Size < 1 || spec.Size > PoolMaxSize {
+		return ErrParamRange
+	}
+
+	c.poolsMu.Lock()
+	if c.pools[spec.Slot] != nil {
+		c.poolsMu.Unlock()
+		return fmt.Errorf("ocxbp: pool already open for slot %d (PoolClose first)", spec.Slot)
+	}
+	p := &pool{
+		slot:        spec.Slot,
+		size:        spec.Size,
+		keepaliveMs: spec.KeepaliveMs,
+		connParams:  spec.ConnParams,
+		entries:     make([]*poolEntry, spec.Size),
+		free:        make(chan int, int(spec.Size)),
+		stop:        make(chan struct{}),
+	}
+	c.pools[spec.Slot] = p
+	c.poolsMu.Unlock()
+
+	// Open the underlying conns sequentially.  Parallelizing would
+	// save a few ms at open but each LFO mutates shared PLC state; the
+	// sibling apex2d daemon also opens its pool sequentially.
+	now := time.Now().UnixNano()
+	openedIdxs := make([]int, 0, int(spec.Size))
+	var openErr error
+	epath := []byte{0x01, spec.Slot}
+	for i := 0; i < int(spec.Size); i++ {
+		appHandle := poolAppHandleBase | (uint16(spec.Slot) << 8) | uint16(i)
+		cs := &ConnSpec{
+			AppHandle:   appHandle,
+			EncodedPath: epath,
+			PathSize:    2,
+			ConnParams:  spec.ConnParams,
+		}
+		if _, _, err := c.TxRxOpen(cs); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"[PoolOpen] slot=%d entry %d/%d open failed: %v\n",
+				spec.Slot, i, spec.Size, err)
+			openErr = err
+			break
+		}
+		p.entries[i] = &poolEntry{appHandle: appHandle}
+		p.entries[i].lastUsed.Store(now)
+		openedIdxs = append(openedIdxs, i)
+	}
+
+	if openErr != nil {
+		// Roll back partial open.
+		for _, i := range openedIdxs {
+			cs := &ConnSpec{
+				AppHandle:   p.entries[i].appHandle,
+				EncodedPath: epath,
+				PathSize:    2,
+				ConnParams:  spec.ConnParams,
+			}
+			_ = c.TxRxClose(cs)
+		}
+		c.poolsMu.Lock()
+		c.pools[spec.Slot] = nil
+		c.poolsMu.Unlock()
+		return openErr
+	}
+
+	// Seed the free channel with all entry indices in order.
+	for i := 0; i < int(spec.Size); i++ {
+		p.free <- i
+	}
+	p.initialized.Store(true)
+
+	if spec.KeepaliveMs > 0 {
+		p.wg.Add(1)
+		go p.keepaliveLoop(c)
+	}
+	return nil
+}
+
+// PoolTxRx sends one CIP request via a pool connection to slot.  The
+// pool picks the next free entry and routes the request through it
+// via the same UCMM transport as TxRxMsg.  Blocks if all entries are
+// in flight; returns ErrNotOpen if no pool exists or it's closing.
+func (c *Client) PoolTxRx(slot uint8, req []byte, resp []byte, respCap uint16) (uint16, error) {
+	if c == nil || len(req) == 0 || resp == nil || respCap == 0 {
+		return 0, ErrNullArg
+	}
+	if slot > MsgMaxSlot {
+		return 0, ErrSlotTooLarge
+	}
+	c.poolsMu.Lock()
+	p := c.pools[slot]
+	c.poolsMu.Unlock()
+	if p == nil || !p.initialized.Load() {
+		return 0, ErrNotOpen
+	}
+
+	p.inflight.Add(1)
+	defer p.inflight.Done()
+
+	var idx int
+	select {
+	case idx = <-p.free:
+	case <-p.stop:
+		return 0, ErrNotOpen
+	}
+	defer func() {
+		p.entries[idx].lastUsed.Store(time.Now().UnixNano())
+		// Try to return; if pool is closing the receive on stop wins.
+		select {
+		case p.free <- idx:
+		case <-p.stop:
+		}
+	}()
+
+	epath := []byte{0x01, slot}
+	cs := &ConnSpec{
+		AppHandle:   p.entries[idx].appHandle,
+		EncodedPath: epath,
+		PathSize:    2,
+		ConnParams:  p.connParams,
+	}
+	got, err := c.TxRxMsg(cs, req, resp, respCap)
+	return got, err
+}
+
+// PoolClose stops the keepalive goroutine, sends Forward_Close on
+// every pool entry, and frees the pool state.  In-flight calls
+// complete first; subsequent PoolTxRx on this slot returns ErrNotOpen.
+// Idempotent: closing a non-existent pool returns nil.
+func (c *Client) PoolClose(slot uint8) error {
+	if c == nil {
+		return ErrNullArg
+	}
+	if slot >= PoolMaxSlots {
+		return ErrSlotTooLarge
+	}
+	c.poolsMu.Lock()
+	p := c.pools[slot]
+	if p == nil {
+		c.poolsMu.Unlock()
+		return nil
+	}
+	c.pools[slot] = nil
+	c.poolsMu.Unlock()
+
+	p.initialized.Store(false)
+	close(p.stop)
+	p.wg.Wait()       // keepalive goroutine exits
+	p.inflight.Wait() // in-flight PoolTxRx finishes
+
+	epath := []byte{0x01, slot}
+	for i := 0; i < int(p.size); i++ {
+		e := p.entries[i]
+		if e == nil || e.appHandle == 0 {
+			continue
+		}
+		cs := &ConnSpec{
+			AppHandle:   e.appHandle,
+			EncodedPath: epath,
+			PathSize:    2,
+			ConnParams:  p.connParams,
+		}
+		// Ignore close errors — PLC may have idle-timed-out and the
+		// SDK frees its own cached state regardless of FC outcome.
+		// Treat the missing-handle error from TxRxClose as benign.
+		if err := c.TxRxClose(cs); err != nil && !errors.Is(err, ErrNotOpen) {
+			// Already logged inside TxRxClose for CIP-layer failures.
+		}
+	}
+	return nil
+}
+
+// keepaliveLoop pings idle pool entries with Identity GAA on a fixed
+// cadence.  Mirrors C pool_keepalive_loop and apex2d's
+// slot_pool_keepalive_idle.  Exits on close(p.stop).
+func (p *pool) keepaliveLoop(c *Client) {
+	defer p.wg.Done()
+	intervalMs := int64(p.keepaliveMs) / 2
+	if intervalMs < 500 {
+		intervalMs = 500
+	}
+	if intervalMs > 5000 {
+		intervalMs = 5000
+	}
+	ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.stop:
+			return
+		case <-ticker.C:
+		}
+
+		now := time.Now().UnixNano()
+		idleNs := int64(p.keepaliveMs) * int64(time.Millisecond)
+		for i := 0; i < int(p.size); i++ {
+			e := p.entries[i]
+			if e == nil || e.dead.Load() {
+				continue
+			}
+			last := e.lastUsed.Load()
+			if now-last < idleNs {
+				continue
+			}
+			// Try to acquire this specific entry; if it's currently
+			// borrowed by a PoolTxRx, skip it (real traffic does the
+			// same job as a ping).  We claim by draining one slot from
+			// the free channel; if we get a different index back we
+			// put it back and skip.
+			var claimed int = -1
+			select {
+			case got := <-p.free:
+				if got == i {
+					claimed = i
+				} else {
+					// Wrong entry — return it; another keepalive tick
+					// will catch entry i.
+					select {
+					case p.free <- got:
+					case <-p.stop:
+						return
+					}
+				}
+			default:
+				// All entries in use; skip this round.
+			}
+			if claimed < 0 {
+				continue
+			}
+
+			epath := []byte{0x01, p.slot}
+			cs := &ConnSpec{
+				AppHandle:   e.appHandle,
+				EncodedPath: epath,
+				PathSize:    2,
+				ConnParams:  p.connParams,
+			}
+			respBuf := make([]byte, 64)
+			_, err := c.TxRxMsg(cs, poolIdentityReq, respBuf, uint16(len(respBuf)))
+			e.lastUsed.Store(time.Now().UnixNano())
+			if err != nil {
+				e.dead.Store(true)
+				fmt.Fprintf(os.Stderr,
+					"[pool keepalive] slot=%d entry %d ping failed: %v — entry marked dead\n",
+					p.slot, i, err)
+			}
+			// Return entry to free pool.
+			select {
+			case p.free <- claimed:
+			case <-p.stop:
+				return
+			}
+		}
+	}
+}

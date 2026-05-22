@@ -30,6 +30,8 @@ type Client struct {
 	shm     *shm.Client
 	txrxMu  sync.Mutex
 	txrxMap map[uint16]*txrxState
+	poolsMu sync.Mutex
+	pools   [PoolMaxSlots]*pool
 }
 
 // Open maps /dev/shm/bpShmem and opens the 33 POSIX named semaphores
@@ -45,10 +47,20 @@ func Open() (*Client, error) {
 	return &Client{shm: s, txrxMap: make(map[uint16]*txrxState)}, nil
 }
 
-// Close releases the IPC. Safe to call on nil.
+// Close releases the IPC. Safe to call on nil.  Any open pools are
+// closed first (with their Forward_Close sends to the PLC and their
+// keepalive goroutines stopped) before tearing down the IPC layer.
 func (c *Client) Close() {
 	if c == nil {
 		return
+	}
+	for s := 0; s < PoolMaxSlots; s++ {
+		c.poolsMu.Lock()
+		p := c.pools[s]
+		c.poolsMu.Unlock()
+		if p != nil {
+			_ = c.PoolClose(uint8(s))
+		}
 	}
 	c.shm.Close()
 	c.shm = nil

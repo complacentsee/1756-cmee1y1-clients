@@ -122,6 +122,45 @@ resp = c.txrx_msg(spec, bytes([0x01, 0x02, 0x20, 0x01, 0x24, 0x01]), 256)
 c.txrx_close(spec)
 ```
 
+### Connection pool + keepalive (v0.8.0)
+
+For callers that do many short conversations against the same PLC,
+the per-slot pool keeps N class-3 connections open and round-robins
+among them.  An optional keepalive thread pings idle entries with
+Identity GAA to dodge the PLC's ~40 s idle timeout.  Mirrors the
+sibling apex2d daemon's `slot_pool_keepalive_idle`.
+
+```c
+// C
+bp_pool_spec_t ps = { .slot = 2, .size = 4, .keepalive_ms = 10000, .conn_params = 0 };
+bp_client_pool_open(c, &ps);
+uint8_t req[]  = {0x01, 0x02, 0x20, 0x01, 0x24, 0x01};
+uint8_t resp[256]; uint16_t got = 0;
+bp_client_pool_txrx(c, 2, req, sizeof(req), resp, sizeof(resp), &got);
+bp_client_pool_close(c, 2);
+```
+
+```go
+// Go — call from multiple goroutines for true concurrent sends.
+c.PoolOpen(&ocxbp.PoolSpec{Slot: 2, Size: 4, KeepaliveMs: 10000})
+resp := make([]byte, 256)
+got, _ := c.PoolTxRx(2, []byte{0x01, 0x02, 0x20, 0x01, 0x24, 0x01},
+                      resp, uint16(len(resp)))
+c.PoolClose(2)
+```
+
+```python
+# Python — call from multiple threads for true concurrent sends.
+c.pool_open(bpclient.PoolSpec(slot=2, size=4, keepalive_ms=10000))
+resp = c.pool_txrx(2, bytes([0x01, 0x02, 0x20, 0x01, 0x24, 0x01]), 256)
+c.pool_close(2)
+```
+
+Benchmark from the cm1756 chassis (slot 2 = L85, 4 conns, 8 workers,
+25 req/worker = 200 total Identity round-trips): ~3900 req/s (C),
+~2300 req/s (Go), ~1500 req/s (Python). Compare with single-connection
+`TxRxMsg` at ~1000 req/s.
+
 ### Arrays + STRING
 
 v0.6.0 ships full array + Logix-STRING parity in every SDK:
@@ -191,6 +230,7 @@ Override the default `tagtest` entrypoint via Docker's
 | `identity`     | Local + remote Identity dump |
 | `connidentity` | Class-3 connected Identity (LFO + bare Identity + FC) |
 | `conntest`     | Class-3 round-trip validator (N Identities) + `--bench` UCMM-vs-Class3 latency |
+| `pooltest`     | v0.8.0 pool + keepalive validator (M workers × N requests through a pre-opened pool) |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |

@@ -384,6 +384,73 @@ int bp_client_txrx_msg(bp_client_t *client, const bp_conn_spec_t *spec,
 int bp_client_txrx_close(bp_client_t *client, const bp_conn_spec_t *spec);
 
 /* ============================================================
+ * Connection pool — pre-opened class-3 conns + idle keepalive
+ *
+ * For callers that do many short conversations against the same PLC,
+ * paying the ~5 ms Forward_Open cost on every send is wasteful.  The
+ * pool keeps `size` connections to one slot open at all times and
+ * round-robins among them on each pool_txrx call.  An optional
+ * keepalive thread sends Identity GetAttributesAll pings on idle
+ * entries to dodge the PLC's idle-timeout (~40 s with
+ * timeout_multiplier=3) — mirrors the sibling apex2d daemon's
+ * slot_pool_keepalive_idle (apex2_cip_connection.c:3287).
+ *
+ * The pool reserves internal app_handles in the range 0x8000..0xFFFF;
+ * caller-managed bp_client_txrx_* connections must use app_handles
+ * < 0x8000 to avoid collision.
+ *
+ * Concurrency: bp_client_pool_txrx is fully reentrant.  N concurrent
+ * sends across `size` pool entries proceed in parallel; the (N+1)th
+ * caller blocks on a condvar until an entry frees up.
+ * ============================================================ */
+#define BP_POOL_MAX_SIZE   16    /* per-slot pool size cap */
+
+/* Pool configuration.  Recommended starting point: size=4,
+ * keepalive_ms=10000, conn_params=0 (SDK default 4000 B). */
+typedef struct {
+    uint8_t  slot;             /* IN: backplane slot 0..0x13 */
+    uint8_t  size;             /* IN: connections to keep open (1..BP_POOL_MAX_SIZE) */
+    uint16_t keepalive_ms;     /* IN: idle ping interval; 0 = disabled.
+                                 *     A pool entry idle ≥ keepalive_ms is
+                                 *     pinged with Identity GetAttributesAll. */
+    uint16_t conn_params;      /* IN: O→T/T→O size in bytes; 0 = SDK default 4000 */
+} bp_pool_spec_t;
+
+/* bp_client_pool_open
+ *   Opens `spec->size` class-3 connections to `spec->slot` and starts
+ *   the keepalive thread (if keepalive_ms > 0).  Only one pool per
+ *   slot per client; calling again on the same slot returns
+ *   BP_ERR_GENERIC (close first).
+ *
+ *   Returns BP_OK if all `size` connections opened successfully.  On
+ *   partial failure (some connections opened, some not), the partial
+ *   state is rolled back (sent Forward_Close on each opened entry)
+ *   and the underlying error is returned (BP_ERR_CIP_STATUS for a
+ *   PLC rejection, BP_ERR_GENERIC for transport failures). */
+int bp_client_pool_open(bp_client_t *client, const bp_pool_spec_t *spec);
+
+/* bp_client_pool_txrx
+ *   Sends one CIP request via a pool connection to `slot`.  The pool
+ *   internally picks the next free entry (round-robin) and routes the
+ *   request through it via the same UCMM transport as
+ *   bp_client_txrx_msg.  Blocks if all entries are in flight.
+ *
+ *   Returns BP_ERR_NOT_OPEN if no pool exists for this slot. */
+int bp_client_pool_txrx(bp_client_t *client, uint8_t slot,
+                         const void *req, uint16_t req_size,
+                         void *resp, uint16_t resp_capacity,
+                         uint16_t *out_resp_size);
+
+/* bp_client_pool_close
+ *   Stops the keepalive thread, sends Forward_Close on every pool
+ *   entry, and frees the pool state.  In-flight calls block until
+ *   the close completes (the close waits for borrowed entries to be
+ *   returned, then closes them in order).
+ *
+ *   Idempotent: closing a non-existent pool returns BP_OK. */
+int bp_client_pool_close(bp_client_t *client, uint8_t slot);
+
+/* ============================================================
  * Tag database
  * ============================================================ */
 

@@ -85,6 +85,41 @@ struct bp_txrx_conn {
     uint16_t sequence;         /* diagnostic only — NOT on the wire */
 };
 
+/* ----- Per-slot connection pool (v0.8.0 Phase 2) -------------- */
+/* Internal app_handle range used by pools: 0x8000..0xFFFF.  Caller
+ * app_handles for bp_client_txrx_* must stay < 0x8000.  Encoding:
+ *
+ *   app_handle = 0x8000 | (slot << 8) | entry_index
+ *
+ * — so given an app_handle in the txrx_conns table we can identify
+ * (pool slot, entry index) without an extra lookup. */
+#define BP_POOL_APP_HANDLE_BASE  0x8000
+#define BP_POOL_MAX_SLOTS        20      /* 0..0x13 — matches BP_MSG_MAX_SLOT + 1 */
+
+struct bp_pool_entry {
+    int      in_use;            /* 1 = currently borrowed by a thread */
+    uint16_t app_handle;        /* matches entry in txrx_conns table */
+    time_t   last_used;         /* updated on every txrx; used by keepalive */
+    int      dead;              /* 1 = LFO failed during pool_open recovery,
+                                 *     or keepalive saw a fatal transport error */
+};
+
+struct bp_pool {
+    int      initialized;
+    uint8_t  slot;
+    uint8_t  size;
+    uint16_t keepalive_ms;
+    uint16_t conn_params;
+    struct bp_client *client;    /* back-pointer for the keepalive thread */
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;          /* signalled when an entry returns to free */
+    struct bp_pool_entry entries[BP_POOL_MAX_SIZE];
+    /* Keepalive thread bookkeeping */
+    pthread_t        ka_thread;
+    int              ka_active;  /* 1 = thread is running; 0 = thread joined */
+    int              ka_stop;    /* set to 1 to request keepalive thread exit */
+};
+
 /* ----- Internal Client + TagDB structs (private to the library) ----- */
 struct bp_client {
     int        shm_fd;
@@ -99,6 +134,8 @@ struct bp_client {
     pthread_mutex_t cip_err_mu;      /* protects cip_err* below */
     int             cip_err_present; /* 1 if cip_err carries a value */
     bp_cip_status_t cip_err;         /* last CIP-layer rejection on this client */
+    pthread_mutex_t pools_mu;        /* protects pools[] open/close lifecycle */
+    struct bp_pool  pools[BP_POOL_MAX_SLOTS];
 };
 
 /* Internal helper exposed across translation units — records a

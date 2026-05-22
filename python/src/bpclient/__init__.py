@@ -28,7 +28,7 @@ from .errors import (
     err_code,
     strerror,
 )
-from .client import Client
+from .client import Client, PoolSpec
 from .tagdb import StructInfo, StructMember, Symbol, TagDB
 from .access import TagRequest
 from .identity import Identity
@@ -45,6 +45,7 @@ __all__ = [
     "Identity",
     "Message",
     "ConnSpec",
+    "PoolSpec",
     "BpError",
     "BpGeneric",
     "BpSendRequest",

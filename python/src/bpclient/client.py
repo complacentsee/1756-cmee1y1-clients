@@ -67,6 +67,9 @@ class Client:
         # v0.7.0+ class-3 connected-messaging cache.  See txrx_open.
         self._txrx_mu = threading.Lock()
         self._txrx_conns: dict[int, _TxRxState] = {}
+        # v0.8.0+ per-slot connection pools.  See pool_open / pool_txrx.
+        self._pools_mu = threading.Lock()
+        self._pools: dict[int, _Pool] = {}
 
     @property
     def raw(self) -> _RawClient:
@@ -78,6 +81,15 @@ class Client:
         self._raw.open()
 
     def close(self) -> None:
+        # Close pools first so keepalive threads stop before we tear
+        # down the underlying IPC; PoolClose sends FC to the PLC.
+        with self._pools_mu:
+            slots = list(self._pools.keys())
+        for s in slots:
+            try:
+                self.pool_close(s)
+            except Exception:
+                pass
         self._raw.close()
 
     def __enter__(self) -> "Client":
@@ -502,6 +514,263 @@ class Client:
                   f"({cip_status_message(status, ext)})", file=sys.stderr)
             raise BpCipError(service=svc, status=status,
                              ext_status=ext, slot=state.slot)
+
+    # ============================================================
+    # Connection pool (v0.8.0)
+    # ============================================================
+    def pool_open(self, spec: "PoolSpec") -> None:
+        """Pre-open ``spec.size`` class-3 connections to ``spec.slot``
+        and start a keepalive thread (if ``keepalive_ms > 0``).  Only
+        one pool per slot per Client; reopening without pool_close
+        first raises BpGeneric.
+
+        On partial failure the partial state is rolled back and the
+        underlying error (BpCipError / BpEngine / etc.) is reraised.
+        """
+        if spec is None:
+            raise BpNullArg("spec is required")
+        if spec.slot > P.MSG_MAX_SLOT:
+            raise BpSlotTooLarge(f"slot {spec.slot} > {P.MSG_MAX_SLOT}")
+        if spec.size < 1 or spec.size > P.POOL_MAX_SIZE:
+            raise BpParamRange(
+                f"size {spec.size} not in 1..{P.POOL_MAX_SIZE}")
+
+        with self._pools_mu:
+            if spec.slot in self._pools:
+                raise BpGeneric(
+                    f"pool already open for slot {spec.slot} "
+                    "(call pool_close first)")
+            pool = _Pool(slot=spec.slot, size=spec.size,
+                         keepalive_ms=spec.keepalive_ms,
+                         conn_params=spec.conn_params)
+            self._pools[spec.slot] = pool
+
+        opened = []
+        try:
+            now = time.monotonic()
+            for i in range(spec.size):
+                app_handle = (P.POOL_APP_HANDLE_BASE
+                              | (spec.slot << 8) | i)
+                cs = ConnSpec(
+                    app_handle=app_handle,
+                    encoded_path=bytes([0x01, spec.slot]),
+                    path_size=2,
+                    conn_params=spec.conn_params,
+                )
+                self.txrx_open(cs)
+                pool.entries.append(_PoolEntry(app_handle=app_handle,
+                                                last_used=now))
+                opened.append(i)
+        except Exception:
+            for i in opened:
+                cs = ConnSpec(
+                    app_handle=pool.entries[i].app_handle,
+                    encoded_path=bytes([0x01, spec.slot]),
+                    path_size=2,
+                    conn_params=spec.conn_params,
+                )
+                try:
+                    self.txrx_close(cs)
+                except Exception:
+                    pass
+            with self._pools_mu:
+                self._pools.pop(spec.slot, None)
+            raise
+
+        # Seed the free queue with all entry indices.
+        for i in range(spec.size):
+            pool.free.put(i)
+        pool.initialized = True
+
+        if spec.keepalive_ms > 0:
+            pool.ka_thread = threading.Thread(
+                target=self._pool_keepalive_loop, args=(pool,),
+                name=f"bpclient-pool-keepalive-{spec.slot}", daemon=True)
+            pool.ka_thread.start()
+
+    def pool_txrx(self, slot: int, req: bytes, resp_capacity: int) -> bytes:
+        """Send one CIP request via a pool connection to ``slot``.
+
+        Returns the raw CIP reply bytes.  Blocks if all pool entries
+        are in flight.  Raises BpNotOpen if no pool is open for this
+        slot (including during pool_close).
+        """
+        if not req:
+            raise BpNullArg("req is required")
+        if resp_capacity <= 0:
+            raise BpNullArg("resp_capacity must be > 0")
+        if slot > P.MSG_MAX_SLOT:
+            raise BpSlotTooLarge(f"slot {slot} > {P.MSG_MAX_SLOT}")
+
+        with self._pools_mu:
+            pool = self._pools.get(slot)
+        if pool is None or not pool.initialized:
+            raise BpNotOpen(f"no pool open for slot {slot}")
+
+        with pool.inflight_lock:
+            pool.inflight += 1
+        try:
+            # Wait for a free entry; if pool is closing the queue will
+            # be drained and we re-check initialized.
+            while True:
+                try:
+                    idx = pool.free.get(timeout=0.5)
+                    break
+                except Exception:
+                    if not pool.initialized:
+                        raise BpNotOpen(f"pool for slot {slot} is closing")
+            try:
+                entry = pool.entries[idx]
+                cs = ConnSpec(
+                    app_handle=entry.app_handle,
+                    encoded_path=bytes([0x01, slot]),
+                    path_size=2,
+                    conn_params=pool.conn_params,
+                )
+                resp = self.txrx_msg(cs, req, resp_capacity)
+            finally:
+                entry.last_used = time.monotonic()
+                if pool.initialized:
+                    pool.free.put(idx)
+        finally:
+            with pool.inflight_lock:
+                pool.inflight -= 1
+                if pool.inflight == 0:
+                    pool.inflight_zero.notify_all()
+        return resp
+
+    def pool_close(self, slot: int) -> None:
+        """Stop the keepalive thread, send Forward_Close on every
+        pool entry, free the state.  In-flight calls finish first.
+
+        Idempotent: closing a non-existent pool is a no-op.
+        """
+        if slot >= P.POOL_MAX_SLOTS:
+            raise BpSlotTooLarge(f"slot {slot} > {P.POOL_MAX_SLOTS - 1}")
+
+        with self._pools_mu:
+            pool = self._pools.pop(slot, None)
+        if pool is None:
+            return
+
+        pool.initialized = False
+        pool.ka_stop.set()
+        if pool.ka_thread is not None:
+            pool.ka_thread.join()
+
+        # Wait for in-flight calls to drain.
+        with pool.inflight_lock:
+            while pool.inflight > 0:
+                pool.inflight_zero.wait()
+
+        for entry in pool.entries:
+            cs = ConnSpec(
+                app_handle=entry.app_handle,
+                encoded_path=bytes([0x01, slot]),
+                path_size=2,
+                conn_params=pool.conn_params,
+            )
+            try:
+                self.txrx_close(cs)
+            except BpNotOpen:
+                pass            # underlying state already gone
+            except Exception:
+                pass            # CIP-layer FC failure is logged inside txrx_close
+
+    def _pool_keepalive_loop(self, pool: "_Pool") -> None:
+        """Periodic Identity GetAttributesAll ping on idle pool entries.
+
+        Mirrors c/src/pool.c::pool_keepalive_loop and the sibling
+        apex2d daemon's slot_pool_keepalive_idle (apex2_cip_connection.c:3287).
+        """
+        interval_ms = max(500, min(5000, pool.keepalive_ms // 2))
+        interval_s = interval_ms / 1000.0
+        identity_req = bytes([0x01, 0x02, 0x20, 0x01, 0x24, 0x01])
+        while pool.initialized:
+            # ka_stop.wait returns True if set (pool_close called) —
+            # exit promptly instead of waiting out the full interval.
+            if pool.ka_stop.wait(interval_s):
+                break
+            if not pool.initialized:
+                break
+            now = time.monotonic()
+            idle_threshold_s = pool.keepalive_ms / 1000.0
+            for i, entry in enumerate(pool.entries):
+                if entry.dead:
+                    continue
+                if (now - entry.last_used) < idle_threshold_s:
+                    continue
+                # Try to acquire this specific entry by draining one
+                # slot from the free queue; if we get a different
+                # index, put it back and skip (real traffic counts
+                # as a ping for that one).
+                try:
+                    got = pool.free.get_nowait()
+                except Exception:
+                    continue
+                if got != i:
+                    if pool.initialized:
+                        pool.free.put(got)
+                    continue
+                try:
+                    cs = ConnSpec(
+                        app_handle=entry.app_handle,
+                        encoded_path=bytes([0x01, pool.slot]),
+                        path_size=2,
+                        conn_params=pool.conn_params,
+                    )
+                    self.txrx_msg(cs, identity_req, 64)
+                except Exception as e:
+                    entry.dead = True
+                    print(f"[pool keepalive] slot={pool.slot} entry {i} "
+                          f"ping failed: {e} — entry marked dead",
+                          file=sys.stderr)
+                finally:
+                    entry.last_used = time.monotonic()
+                    if pool.initialized:
+                        pool.free.put(i)
+
+
+@dataclass
+class PoolSpec:
+    """Configuration for a per-slot connection pool.
+
+    Recommended defaults: ``size=4``, ``keepalive_ms=10000``,
+    ``conn_params=0`` (SDK default 4000 B).
+    """
+    slot: int = 0
+    size: int = 4
+    keepalive_ms: int = 0      # 0 disables the keepalive thread
+    conn_params: int = 0
+
+
+@dataclass
+class _PoolEntry:
+    app_handle: int
+    last_used: float
+    dead: bool = False
+
+
+class _Pool:
+    """Internal per-slot pool state."""
+    def __init__(self, slot: int, size: int,
+                 keepalive_ms: int, conn_params: int) -> None:
+        import queue
+        self.slot = slot
+        self.size = size
+        self.keepalive_ms = keepalive_ms
+        self.conn_params = conn_params
+        self.entries: list[_PoolEntry] = []
+        self.free: "queue.Queue[int]" = queue.Queue(maxsize=size)
+        self.initialized = False
+        self.ka_thread: threading.Thread | None = None
+        # ka_stop is set in pool_close to interrupt the keepalive sleep
+        # so we don't wait up to keepalive_ms/2 ms on Python's
+        # time.sleep — without this the join() in pool_close stalls.
+        self.ka_stop = threading.Event()
+        self.inflight = 0
+        self.inflight_lock = threading.Lock()
+        self.inflight_zero = threading.Condition(self.inflight_lock)
 
 
 # Re-import to avoid a circular ref at module top.

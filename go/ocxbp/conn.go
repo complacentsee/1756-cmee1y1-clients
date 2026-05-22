@@ -20,6 +20,19 @@ type ConnSpec = cip.ConnSpec
 // C SDK BP_TXRX_MAX_CONNS.
 const TxRxMaxConns = 16
 
+// PoolMaxSize is the per-slot cap on pool size, mirroring C's
+// BP_POOL_MAX_SIZE.  PoolMaxSlots mirrors BP_POOL_MAX_SLOTS — one
+// pool per backplane slot 0..0x13.
+const (
+	PoolMaxSize  = 16
+	PoolMaxSlots = 20
+	// Internal app_handle range used by pools (0x8000..0xFFFF).  User
+	// PoolMaxSlots * PoolMaxSize must fit; PoolMaxSlots * (1 << 8)
+	// gives slot 19 → 0x9300, well below 0xFFFF.  Mirrors C's
+	// BP_POOL_APP_HANDLE_BASE.
+	poolAppHandleBase = uint16(0x8000)
+)
+
 // Per-process serial generator state.  We don't reseed for each
 // open — one seed at first use is fine since the PLC removes
 // serials on Forward_Close and on idle timeout, so collisions are

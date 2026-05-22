@@ -79,6 +79,11 @@ _LFO_OT_HINT = 0x80010000
 _LFO_TO_HINT = 0x80000001
 TXRX_MAX_CONNS = 16                 # per Client
 
+# Connection pool (v0.8.0+).  Mirrors C BP_POOL_*.
+POOL_MAX_SIZE = 16                  # per-slot pool cap
+POOL_MAX_SLOTS = 20                 # MSG_MAX_SLOT + 1
+POOL_APP_HANDLE_BASE = 0x8000       # internal app_handle = base | (slot<<8) | index
+
 # CIP atomic type codes (low 13 bits of data_type)
 TYPE_BOOL = 0xC1
 TYPE_SINT = 0xC2
