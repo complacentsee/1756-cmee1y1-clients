@@ -22,6 +22,7 @@ set(LIB_SOURCES
     src/errors.c
     src/message.c
     src/identity.c
+    src/module.c
 )
 
 # Shared library
@@ -30,7 +31,7 @@ target_link_libraries(bpclient PRIVATE pthread rt)
 set_target_properties(bpclient PROPERTIES
     PUBLIC_HEADER include/bpclient.h
     SOVERSION 0
-    VERSION 0.4.0
+    VERSION 0.4.5
 )
 
 # Static library (same sources, different target)
@@ -96,6 +97,10 @@ target_link_libraries(actnodes PRIVATE bpclient pthread rt)
 add_executable(msgprobe_routed examples/msgprobe_routed.c)
 target_link_libraries(msgprobe_routed PRIVATE bpclient pthread rt)
 
+# Example: modutil — local cm1756 module utilities (switch / display / LED)
+add_executable(modutil examples/modutil.c)
+target_link_libraries(modutil PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -121,5 +126,6 @@ install(TARGETS
             identity
             pathprobe
             actnodes
+            modutil
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

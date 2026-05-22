@@ -183,6 +183,36 @@ int bp_client_get_active_nodes(bp_client_t *client,
                                 uint32_t *out_mask_high);
 
 /* ============================================================
+ * Module-side utilities — LED / Display / Switch position
+ *
+ * These act on the local cm1756 (the EEC card itself).  They do
+ * NOT route to other backplane devices.
+ * ============================================================ */
+
+/* bp_client_get_switch_position
+ *   Returns the front-panel rotary switch reading (or 0 if no
+ *   switch / firmware doesn't expose it). */
+int bp_client_get_switch_position(bp_client_t *client, uint32_t *out_value);
+
+/* bp_client_get_led / bp_client_set_led
+ *   LED identifier and state are vendor-defined uint32 codes.
+ *   Refer to ASEM/Rockwell EEC docs for the LED IDs available on
+ *   your hardware revision. */
+int bp_client_get_led(bp_client_t *client, uint32_t led_id, uint32_t *out_state);
+int bp_client_set_led(bp_client_t *client, uint32_t led_id, uint32_t  state);
+
+/* bp_client_get_display / bp_client_set_display
+ *   Read or write the 4-character module display.  Pass a 4-byte
+ *   buffer in `four_chars`; for set, all 4 bytes are written
+ *   verbatim (the engine appends a NUL on the wire).  For get,
+ *   the result buffer must be at least 5 bytes (4 chars + NUL).
+ *
+ *   Note: on some firmware revisions Set is silently ignored by
+ *   the engine — call Get afterward to verify if exactness matters. */
+int bp_client_get_display(bp_client_t *client, char out_five_chars[5]);
+int bp_client_set_display(bp_client_t *client, const char four_chars[4]);
+
+/* ============================================================
  * Tag database
  * ============================================================ */
 
