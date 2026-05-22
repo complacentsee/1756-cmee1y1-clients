@@ -106,6 +106,12 @@ target_link_libraries(modutil PRIVATE bpclient pthread rt)
 add_executable(connidentity examples/connidentity.c)
 target_link_libraries(connidentity PRIVATE bpclient pthread rt)
 
+# Example: conntest — v0.7.0 cross-language connected-messaging
+# validator (sends N Identities on a class-3 connection; --bench
+# does a UCMM-vs-class3 latency micro-benchmark).
+add_executable(conntest examples/conntest.c)
+target_link_libraries(conntest PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -133,5 +139,6 @@ install(TARGETS
             actnodes
             modutil
             connidentity
+            conntest
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
