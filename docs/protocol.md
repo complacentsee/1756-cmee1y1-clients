@@ -280,47 +280,84 @@ RESPONSE:
 The C SDK's `bp_tagdb_test_version` collapses `0x14` and `0x15` into
 `*out_changed = 1`; both signal the caller to call `bp_tagdb_build`.
 
-### `OCXcip_MessageSend` — one explicit (UCMM) CIP request
+### `OCXcip_MessageSend` — one unconnected (UCMM) CIP request
 
-Sends a single unconnected CIP request and waits for the response.
-Most useful for **Get_Attribute_All** (service `0x01`) against
-ControlLogix objects.  Other services rarely round-trip cleanly
-through this API on the cm1756 — see the limitations note below.
+Sends a single UCMM CIP request to a chosen backplane slot and waits
+for the raw CIP response.  Use this for arbitrary services (Identity
+Get_Attributes_All, custom vendor classes, routed Unconnected_Send,
+…) — anything where you have the full CIP request bytes already
+encoded.
 
 ```
 fn_name        = "OCXcip_MessageSend"
 payload_size   = 0x32088
 
 REQUEST PAYLOAD:
-  slot + 0x00078  uint8[]  encoded_path        raw CIP EPATH bytes (path_size bytes)
-  slot + 0x19078  uint16   path_size           byte count of encoded_path (1..500)
+  slot + 0x00078  uint8[]  cip_request         full CIP request body (req_size bytes)
+                                               [service, path_size_words, path..., body...]
+  slot + 0x19078  uint16   req_size            byte count of cip_request (1..500)
   slot + 0x3207a  uint16   resp_capacity (in)  caller buffer size (must be > 0)
-  slot + 0x32080  uint8    service             CIP service code (engine requires < 0x14)
-  slot + 0x32082  uint16   class_or_misc       class word (low 16 bits significant)
+  slot + 0x32080  uint8    slot                BACKPLANE SLOT NUMBER (0..0x13)
+  slot + 0x32082  uint16   timeout_ms          per-attempt timeout (engine clamps min to 26)
 
 RESPONSE PAYLOAD:
-  slot + 0x1907a  uint8[]  response data       up to resp_len bytes; raw CIP response
-                                               (service_reply | 0x80, reserved, general_status, ...)
+  slot + 0x1907a  uint8[]  response data       raw CIP response, resp_len bytes
+                                               [reply_svc (= req_svc|0x80), reserved,
+                                                general_status, ext_status_size_words,
+                                                ext_status[ext_size*2], body...]
   slot + 0x3207a  uint16   resp_len  (out)     bytes the engine wrote
   slot + 0x3207c  uint32   status    (out)     wrapper status field
   slot + 0x50     int32    errorcode           normal slot semantics
 ```
 
-**`encoded_path` is caller-built raw CIP EPATH — but the wrapper
-appears to use it for OBJECT addressing only, not for backplane
-routing.**  Empirical observation on cm1756: hand-built paths with
-port-segment routing (e.g. `0x01, 0x01, ...` vs `0x01, 0x02, ...`)
-return the SAME default-target Identity, not the per-slot device.
-The OEM library appears to maintain target routing in session state
-(set via `OCXcip_ParsePath` or similar), and the bytes you pass via
-`encoded_path` here are interpreted as the object EPATH only.
+**Field name correction from earlier revisions of this doc.**  The
+OEM wrapper signature is `OCXcip_MessageSend(handle, ep, ep_sz, resp,
+&resp_len, &status, service, class_or_misc)`.  RE of the engine
+(`OC_bpMessageSend` at libocxbpeng.so.2.3 0x19bf84 →
+`um_ProcessClientRequest` at 0x18c518), corroborated by the
+historianupdate apex2d daemon's `apex2_asic_send_ucmm`, shows:
 
-For per-slot device queries use `bp_client_get_device_id(text_path,
-instance, ...)` — that helper wraps `OCXcip_GetDeviceIdObject`
-which takes a textual path like `"P:1,S:2"` and delegates path
-parsing + routing to the OEM library.
+| Wrapper name | Actual meaning | Where on the wire |
+|---|---|---|
+| `service` (u8)        | **backplane slot number** (0..0x13) | CB+0x1C (chip control block) |
+| `class_or_misc` (u16) | **per-attempt timeout in ms** (>=26) | CB+0x10, multiplied by 1000 → microseconds |
+| `encoded_path` (u8[]) | **full CIP request body**, not just an EPATH | Copied verbatim into UCMM TX buffer |
 
-Standard logical segments still apply to `encoded_path`:
+There is no separate "default target" state on the chip.  The slot
+byte is the only routing input; the CIP request bytes are forwarded
+as-is.  For off-chassis routing (DH+, EtherNet/IP, ControlNet) embed
+an Unconnected_Send (service 0x52) in `cip_request` and put the
+route_path inside the embedded message.
+
+The C SDK exposes the corrected names via `bp_message_t`:
+
+```c
+uint8_t resp[256];
+uint8_t identity_req[] = {
+    0x01,                     /* CIP service: Get_Attributes_All */
+    0x02,                     /* path_size in words */
+    0x20, 0x01, 0x24, 0x01,   /* class 1 (Identity), instance 1 */
+};
+bp_message_t msg = {
+    .slot          = 2,                  /* L85 in slot 2 */
+    .cip_request   = identity_req,
+    .req_size      = sizeof(identity_req),
+    .timeout_ms    = 3000,
+    .resp_data     = resp,
+    .resp_capacity = sizeof(resp),
+};
+bp_client_message_send(client, &msg);
+/* msg.resp_data now holds:
+ *   resp[0] = 0x81  (= req_svc 0x01 | 0x80)
+ *   resp[1] = 0
+ *   resp[2] = general status (0 on success)
+ *   resp[3] = ext status size in words
+ *   resp[4..] = vendor_id, device_type, product_code, fw_major, fw_minor,
+ *               status, serial, name_len, name[name_len]
+ */
+```
+
+Path segment reference (for hand-building `cip_request` paths):
 
 | Segment | Wire | Purpose |
 |---|---|---|
@@ -329,34 +366,27 @@ Standard logical segments still apply to `encoded_path`:
 | Logical 8-bit Instance | `0x24, instID` | select instance |
 | Logical 16-bit Instance | `0x25, 0x00, lo, hi` | select instance (>= 256) |
 | Logical 8-bit Attribute | `0x30, attrID` | select attribute |
+| Extended Symbolic | `0x91, len, name[len], 0?` | tag name (NUL-pad to word) |
 
-Example — Identity Get_Attribute_All on default target (routing set
-elsewhere, e.g. via a prior tagdb open):
-```c
-uint8_t epath[] = { 0x20, 0x01,        /* class 1 (Identity) */
-                    0x24, 0x01 };      /* instance 1 */
-bp_message_t msg = {
-    .encoded_path = epath, .path_size = sizeof(epath),
-    .service = 0x01, .class_or_misc = 0x0001,
-    .resp_data = buf, .resp_capacity = sizeof(buf),
-};
-bp_client_message_send(client, &msg);
-```
+**Empirically verified service support on cm1756, sweeping slots 0..3:**
 
-**Tested service support on cm1756 + L85E:**
+| `slot` | `cip_request` | Device | Reply |
+|---|---|---|---|
+| 0 | `01 02 20 01 24 01` | 1756-HIST2G/B | Get_Attributes_All ok |
+| 1 | `01 02 20 01 24 01` | 1756-L73/A LOGIX5573 | Get_Attributes_All ok |
+| 2 | `01 02 20 01 24 01` | 1756-L85E/B | Get_Attributes_All ok |
+| 3 | `01 02 20 01 24 01` | 1756 Embedded Edge Compute (self) | Get_Attributes_All ok |
+| 1 | `0e 03 20 01 24 01 30 01` | L73 vendor attr | Get_Attribute_Single ok (reply 0x8e, vendor=0x0001) |
+| 4 | `01 02 20 01 24 01` | empty slot | rc=3 (engine refused, no response) |
 
-| Service | Result | Notes |
+Range and validity rules:
+
+| Field | Validation | Failure |
 |---|---|---|
-| `0x01` Get_Attribute_All | ✓ works | Returns full CIP Get_Attribute_All response (service_reply `0x81`, then attribute data) |
-| `0x0E` Get_Attribute_Single | ✗ rc=3 | Wrapper / engine rejects across all tested paths.  The OEM library exposes dedicated wrappers (`OCXcip_GetIdObject`, `OCXcip_GetSwitchPosition`, etc.) instead. |
-| Service code >= `0x14` (20) | rc=1 | Engine pre-flight rejection (`OC_bpMessageSend` validates `service < 0x14`). |
-
-The rc=3 for Get_Attribute_Single is consistent across local and
-backplane-routed requests, across multiple paths (with/without
-8-bit vs 16-bit attribute segments), and across multiple classes.
-We believe this is intentional OEM behavior — MessageSend is for
-"object-level" Get_Attribute_All queries; per-attribute reads go
-via the dedicated OCXcip_* helpers (Phase 4).
+| `slot` | `< 0x14` (20) | engine rc=1 |
+| `req_size` | `1..500` | engine rc=1 (returned before wire) |
+| `timeout_ms` | clamped to min 26 | silent; retry budget exhausts → engine rc=14 |
+| `resp_capacity` | `> 0` | SDK returns `BP_ERR_NULL_ARG` |
 
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 

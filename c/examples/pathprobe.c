@@ -1,7 +1,8 @@
 /*
  * pathprobe.c — invoke OCXcip_ParsePath and dump the encoded EPATH
- *               bytes it produces.  Use this as ground truth when
- *               hand-building paths for bp_client_message_send().
+ *               bytes it produces.  Useful when hand-building the
+ *               route_path inside a routed Unconnected_Send (svc 0x52)
+ *               carried in bp_client_message_send().cip_request.
  *
  * Usage:
  *   pathprobe "P:1,S:2"

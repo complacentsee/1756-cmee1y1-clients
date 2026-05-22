@@ -92,51 +92,66 @@ void bp_client_close(bp_client_t *client);
 int  bp_client_open_session(bp_client_t *client, uint32_t *out_handle);
 
 /* ============================================================
- * Explicit (UCMM) messaging — bp_client_message_send
+ * Unconnected (UCMM) CIP messaging — bp_client_message_send
  *
- * One unconnected CIP request to the wrapper's *default* backplane
- * target — typically the first PLC in the chassis, NOT a slot of
- * your choosing.  Port-segment routing inside encoded_path is
- * ignored by the OEM library; we verified empirically that paths
- * with `{0x01, 0x01, ...}` and `{0x01, 0x02, ...}` reach the same
- * device regardless of which slot you intend to address.
+ * Sends one UCMM CIP request to a chosen backplane slot and returns
+ * the raw CIP response.  Equivalent to apex2_asic_send_ucmm in the
+ * sibling apex2d daemon — the cm1756 chip firmware does the wire
+ * framing; the host just supplies (slot, full CIP request, timeout).
  *
- * **For per-slot device queries use bp_client_get_device_id()** —
- * that helper takes a textual path ("P:1,S:2"), delegates to the
- * OEM's OCXcip_GetDeviceIdObject, and DOES route correctly.
+ * Wire format (RE'd from OC_bpMessageSend in libocxbpeng.so.2.3 at
+ * 0x19bf84 + um_ProcessClientRequest at 0x18c518; corroborated by the
+ * historianupdate apex2d daemon's apex2_asic_send_ucmm):
  *
- * The OEM wrapper accepts service codes < 0x14 only.  Verified
- * working services on cm1756 + L73:
- *   - 0x01 Get_Attribute_All — returns full CIP response framed as
- *     [service_reply | 0x80, reserved, general_status, ext_size, ...]
- *   - Most other service codes return CIP General Status 0x03 / 0x04
- *     ("Invalid parameter" / "Path segment error") because the device
- *     receives a request shaped for Get_Attribute_All semantics.
+ *   - `slot`        is the BACKPLANE SLOT NUMBER (not a CIP service);
+ *                   engine validates < 0x14 (20).  The chip writes
+ *                   it to CB+0x1C and the ASIC firmware does the
+ *                   UCMM routing.  Slot 0 = first device in chassis
+ *                   (may be a Historian / power supply / etc.).
+ *   - `cip_request` is the COMPLETE CIP request body byte stream:
+ *                       [service, path_size_words, path..., body...]
+ *                   It is copied verbatim into the UCMM transmit
+ *                   buffer.  No port segments are prepended.
+ *   - `timeout_ms`  is the per-attempt timeout in milliseconds
+ *                   (engine clamps min to 26 ms).
  *
- * `class_or_misc` is informational — engine validates it but it does
- * not affect the on-wire request.  See docs/protocol.md for the
- * full wire-format exploration notes.
+ * Routing note: there is NO "default target" state on the chip — the
+ * slot byte is the only routing input.  Earlier confusion (T9/T13
+ * returning L73 for "any" path) was caused by passing the CIP service
+ * 0x01 in the field we now call `slot`, which addressed slot 1 = L73.
+ *
+ * CIP response: parse resp_data as
+ *     [reply_service (= req_service | 0x80), reserved, general_status,
+ *      ext_status_size_words, ext_status[ext_size*2], body...]
+ *
+ * For routing OFF-chassis (DH+, ControlNet, EtherNet/IP), embed an
+ * Unconnected_Send (service 0x52) in cip_request with the route path
+ * inside the embedded message — the chip just forwards the bytes.
  * ============================================================ */
 
+#define BP_MSG_MAX_SLOT     0x13    /* engine validates < 0x14 (20) */
+#define BP_MSG_MAX_REQ      500     /* engine validates path_size <= 500 */
+#define BP_MSG_MIN_TIMEOUT  26      /* engine clamps below this (ms) */
+
 typedef struct {
-    const uint8_t *encoded_path;   /* raw CIP EPATH bytes, max 500 */
-    uint16_t       path_size;      /* byte count of encoded_path */
-    uint8_t        service;        /* CIP service code (engine requires < 0x14) */
-    uint16_t       class_or_misc;  /* class word; low 16 bits significant */
-    uint16_t       resp_capacity;  /* in: caller's buffer size (MUST be > 0) */
-    void          *resp_data;      /* in: caller-allocated buffer */
-    uint16_t       resp_len;       /* out: actual response bytes server wrote */
-    uint32_t       status;         /* out: wrapper status field */
+    uint8_t        slot;           /* IN: backplane slot 0..0x13 */
+    const uint8_t *cip_request;    /* IN: full CIP request bytes */
+    uint16_t       req_size;       /* IN: byte count of cip_request, 1..500 */
+    uint16_t       timeout_ms;     /* IN: per-attempt timeout (0 → engine min 26 ms) */
+    void          *resp_data;      /* IN: caller-allocated response buffer */
+    uint16_t       resp_capacity;  /* IN: capacity of resp_data (MUST be > 0) */
+    uint16_t       resp_len;       /* OUT: actual bytes server wrote */
+    uint32_t       status;         /* OUT: wrapper status field (0 on success) */
 } bp_message_t;
 
 /* bp_client_message_send
  *   Returns BP_OK if the message round-tripped, regardless of CIP
  *   General Status — caller must inspect the first ~4 bytes of
- *   resp_data for the CIP response header (service_reply, reserved,
- *   general_status, additional_status_size).  Negative return =
- *   transport error.  Positive return (1, 3, ...) = engine-side
- *   rejection before the wire (1 = bad param, 3 = engine refused
- *   for the given service/class combination).
+ *   resp_data for the CIP response header.  Negative return =
+ *   transport / parameter error.  Positive returns are engine codes:
+ *     1  = bad param (e.g. slot >= 0x14)
+ *     3  = engine refused / target unresponsive (empty slot)
+ *     14 = retry budget exhausted (raise timeout_ms)
  */
 int bp_client_message_send(bp_client_t *client, bp_message_t *msg);
 

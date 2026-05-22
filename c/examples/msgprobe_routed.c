@@ -1,11 +1,16 @@
 /*
  * msgprobe_routed.c — like msgprobe, but opens a TagDb handle on a
- *                     given path first.  Tests whether MessageSend
- *                     picks up its routing from the most recently
- *                     opened tagdb handle.
+ *                     given path first.  Historically tested whether
+ *                     MessageSend inherits routing from CreateTagDbHandle.
+ *
+ *                     Result: it does NOT.  MessageSend routes purely
+ *                     by the `slot` byte; the tagdb handle is irrelevant
+ *                     to the UCMM send path (the chip uses the same
+ *                     UCMM MBOX_LOOPBACK regardless).  Kept for
+ *                     regression coverage.
  *
  * Usage:
- *   msgprobe_routed --path "P:1,S:2" --service 0x01 --class 1 --epath "20 01 24 01"
+ *   msgprobe_routed --path "P:1,S:2" --slot 2 --req "01 02 20 01 24 01"
  *
  * SPDX-License-Identifier: MIT
  */
@@ -33,35 +38,38 @@ static size_t parse_hex(const char *s, uint8_t *out, size_t cap) {
 
 int main(int argc, char *argv[]) {
     const char *tagdb_path = NULL;
-    int service = -1;
-    int class_or_misc = 0;
-    const char *epath_hex = NULL;
+    int slot = -1;
+    int timeout_ms = 0;
+    const char *req_hex = NULL;
     static struct option opts[] = {
-        {"path",    required_argument, 0, 'p'},
-        {"service", required_argument, 0, 's'},
-        {"class",   required_argument, 0, 'c'},
-        {"epath",   required_argument, 0, 'e'},
+        {"path",       required_argument, 0, 'p'},
+        {"slot",       required_argument, 0, 's'},
+        {"req",        required_argument, 0, 'r'},
+        {"timeout-ms", required_argument, 0, 't'},
+        /* legacy aliases */
+        {"service",    required_argument, 0, 's'},
+        {"epath",      required_argument, 0, 'r'},
+        {"class",      required_argument, 0, 't'},
         {0,0,0,0}
     };
     int oc, idx;
-    while ((oc = getopt_long(argc, argv, "p:s:c:e:", opts, &idx)) != -1) {
-        if      (oc == 'p') tagdb_path    = optarg;
-        else if (oc == 's') service       = (int)strtol(optarg, NULL, 0);
-        else if (oc == 'c') class_or_misc = (int)strtol(optarg, NULL, 0);
-        else if (oc == 'e') epath_hex     = optarg;
+    while ((oc = getopt_long(argc, argv, "p:s:r:t:", opts, &idx)) != -1) {
+        if      (oc == 'p') tagdb_path = optarg;
+        else if (oc == 's') slot       = (int)strtol(optarg, NULL, 0);
+        else if (oc == 'r') req_hex    = optarg;
+        else if (oc == 't') timeout_ms = (int)strtol(optarg, NULL, 0);
     }
-    if (!tagdb_path || service < 0 || !epath_hex) {
-        fprintf(stderr, "Usage: --path P:1,S:N --service 0xNN --epath \"20 01 ...\" [--class NNN]\n");
+    if (!tagdb_path || slot < 0 || !req_hex) {
+        fprintf(stderr, "Usage: --path P:1,S:N --slot N --req \"01 02 ...\" [--timeout-ms 1000]\n");
         return 2;
     }
-    uint8_t epath[256];
-    size_t epath_len = parse_hex(epath_hex, epath, sizeof(epath));
+    uint8_t req[256];
+    size_t req_len = parse_hex(req_hex, req, sizeof(req));
 
     bp_client_t *cl = NULL;
     if (bp_client_open(&cl) != BP_OK) return 2;
     bp_client_open_session(cl, NULL);
 
-    /* Open a tagdb handle on the path — establishes routing? */
     bp_tagdb_t *db = NULL;
     int rc = bp_tagdb_open(cl, tagdb_path, &db);
     printf("[msgprobe_routed] tagdb_open('%s')  rc=%d (%s)\n", tagdb_path, rc, bp_strerror(rc));
@@ -69,10 +77,10 @@ int main(int argc, char *argv[]) {
 
     uint8_t respbuf[256];
     bp_message_t msg = {
-        .encoded_path  = epath,
-        .path_size     = (uint16_t)epath_len,
-        .service       = (uint8_t)service,
-        .class_or_misc = (uint16_t)class_or_misc,
+        .slot          = (uint8_t)slot,
+        .cip_request   = req,
+        .req_size      = (uint16_t)req_len,
+        .timeout_ms    = (uint16_t)timeout_ms,
         .resp_data     = respbuf,
         .resp_capacity = sizeof(respbuf),
     };
@@ -83,7 +91,6 @@ int main(int argc, char *argv[]) {
     for (uint16_t i = 0; i < msg.resp_len; i++) printf("%02x ", respbuf[i]);
     printf("\n");
 
-    /* Parse if it looks like a standard CIP response */
     if (msg.resp_len >= 4) {
         uint8_t  svc_reply  = respbuf[0];
         uint8_t  gen_status = respbuf[2];

@@ -1,21 +1,20 @@
 /*
  * msgprobe.c — manual OCXcip_MessageSend invocation + raw response
- *              hex dump.  Used to RE the wire format empirically
- *              (specifically: what does `encoded_path` contain —
- *              EPATH only, or EPATH + request body?).
+ *              hex dump.  RE/diagnostic tool — bypasses the public
+ *              bp_message_t struct and writes the IPC slot directly
+ *              so we can verify what the wrapper does with each
+ *              field independently.
  *
  * Usage examples:
- *   # Identity vendor ID of LOCAL cm1756 (no backplane routing):
- *   msgprobe --service 0x0e --class 1 \
- *            --path "20 01 24 01 30 01"
+ *   # Get_Attributes_All on Identity, slot 1 (L73):
+ *   msgprobe --slot 1 --req "01 02 20 01 24 01"
  *
- *   # Identity vendor ID of L85E (slot 2):
- *   msgprobe --service 0x0e --class 1 \
- *            --path "01 02 20 01 24 01 30 01"
+ *   # Get_Attribute_Single (svc 0x0e), attribute 1 = vendor, on slot 2 (L85):
+ *   msgprobe --slot 2 --req "0e 03 20 01 24 01 30 01"
  *
- *   # Get_Attribute_All (svc 0x01) on Identity:
- *   msgprobe --service 0x01 --class 1 \
- *            --path "01 02 20 01 24 01"
+ *   # Hand-crafted Unconnected_Send (svc 0x52) — chip just forwards the
+ *   # bytes, target slot 1 routes to the named device.
+ *   msgprobe --slot 1 --req "52 02 20 06 24 01 ..."
  *
  * SPDX-License-Identifier: MIT
  */
@@ -29,23 +28,21 @@
 #include "bpclient.h"
 #include "../src/proto.h"
 
-/* Wire-format offsets (RE'd from libocxbpapi-w.so OCXcip_MessageSend
- * at 0x109ec0).  All offsets are from the slot's base; multiply by 2
- * when comparing against the Ghidra decompile of puStack_8[N]. */
-#define MS_PATH_OFF        0x00078u  /* encoded_path bytes (length = MS_PATH_SIZE) */
-#define MS_PATH_SIZE_OFF   0x19078u  /* uint16 byte count of MS_PATH */
-#define MS_RESPDATA_OFF    0x1907au  /* response data buffer (and possibly req body) */
-#define MS_RESPLEN_OFF     0x3207au  /* uint16 in: capacity; out: actual response length */
-#define MS_STATUS_OFF      0x3207cu  /* uint32 out: status (CIP general + extended?) */
-#define MS_SERVICE_OFF     0x32080u  /* uint8 service code */
-#define MS_CLASSMISC_OFF   0x32082u  /* uint16 class word / misc */
+/* Wire-format offsets — see src/message.c for the full RE notes. */
+#define MS_REQ_OFF         0x00078u
+#define MS_REQ_SIZE_OFF    0x19078u
+#define MS_RESPDATA_OFF    0x1907au
+#define MS_RESPLEN_OFF     0x3207au
+#define MS_STATUS_OFF      0x3207cu
+#define MS_SLOT_OFF        0x32080u
+#define MS_TIMEOUT_OFF     0x32082u
 
 typedef struct {
-    const uint8_t *path;
-    uint16_t       path_size;
+    const uint8_t *req;
+    uint16_t       req_size;
     uint16_t       resp_capacity;
-    uint8_t        service;
-    uint16_t       class_or_misc;
+    uint8_t        slot;
+    uint16_t       timeout_ms;
 
     uint8_t        resp_buf[4096];
     uint16_t       resp_len;       /* server-written */
@@ -54,11 +51,11 @@ typedef struct {
 
 static void mp_fill(uint8_t *slot, void *user) {
     mp_ctx_t *c = user;
-    memcpy(slot + MS_PATH_OFF, c->path, c->path_size);
-    bp_st_u16(slot + MS_PATH_SIZE_OFF, c->path_size);
-    bp_st_u16(slot + MS_RESPLEN_OFF,   c->resp_capacity);
-    *(slot + MS_SERVICE_OFF) = c->service;
-    bp_st_u16(slot + MS_CLASSMISC_OFF, c->class_or_misc);
+    memcpy(slot + MS_REQ_OFF, c->req, c->req_size);
+    bp_st_u16(slot + MS_REQ_SIZE_OFF, c->req_size);
+    bp_st_u16(slot + MS_RESPLEN_OFF,  c->resp_capacity);
+    *(slot + MS_SLOT_OFF) = c->slot;
+    bp_st_u16(slot + MS_TIMEOUT_OFF, c->timeout_ms);
 }
 
 static void mp_read(uint8_t *slot, void *user) {
@@ -100,45 +97,49 @@ static size_t parse_hex(const char *s, uint8_t *out, size_t cap) {
 }
 
 int main(int argc, char *argv[]) {
-    int service = -1;
-    int class_or_misc = 0;
-    const char *path_hex = NULL;
+    int slot = -1;
+    int timeout_ms = 0;
+    const char *req_hex = NULL;
 
     static struct option opts[] = {
-        {"service", required_argument, 0, 's'},
-        {"class",   required_argument, 0, 'c'},
-        {"path",    required_argument, 0, 'p'},
+        {"slot",       required_argument, 0, 's'},
+        {"req",        required_argument, 0, 'r'},
+        {"timeout-ms", required_argument, 0, 't'},
+        /* legacy aliases (deprecated) */
+        {"service",    required_argument, 0, 's'},
+        {"path",       required_argument, 0, 'r'},
+        {"class",      required_argument, 0, 't'},
         {0,0,0,0}
     };
     int oc, idx;
-    while ((oc = getopt_long(argc, argv, "s:c:p:", opts, &idx)) != -1) {
-        if      (oc == 's') service = (int)strtol(optarg, NULL, 0);
-        else if (oc == 'c') class_or_misc = (int)strtol(optarg, NULL, 0);
-        else if (oc == 'p') path_hex = optarg;
+    while ((oc = getopt_long(argc, argv, "s:r:t:", opts, &idx)) != -1) {
+        if      (oc == 's') slot       = (int)strtol(optarg, NULL, 0);
+        else if (oc == 'r') req_hex    = optarg;
+        else if (oc == 't') timeout_ms = (int)strtol(optarg, NULL, 0);
     }
-    if (service < 0 || !path_hex) {
-        fprintf(stderr, "Use --service 0x0e --class 1 --path \"20 01 24 01 30 01\"\n");
+    if (slot < 0 || !req_hex) {
+        fprintf(stderr, "Use --slot 1 --req \"01 02 20 01 24 01\" [--timeout-ms 1000]\n");
         return 2;
     }
 
-    uint8_t path_bytes[256];
-    size_t path_len = parse_hex(path_hex, path_bytes, sizeof(path_bytes));
-    if (path_len == 0) { fprintf(stderr, "empty path\n"); return 2; }
+    uint8_t req_bytes[256];
+    size_t req_len = parse_hex(req_hex, req_bytes, sizeof(req_bytes));
+    if (req_len == 0) { fprintf(stderr, "empty req\n"); return 2; }
 
-    printf("[msgprobe] service=0x%02x class_or_misc=0x%04x path=", service, class_or_misc);
-    for (size_t i = 0; i < path_len; i++) printf("%02x ", path_bytes[i]);
-    printf("(%zu bytes)\n\n", path_len);
+    printf("[msgprobe] slot=%d timeout_ms=%d req=", slot, timeout_ms);
+    for (size_t i = 0; i < req_len; i++) printf("%02x ", req_bytes[i]);
+    printf("(%zu bytes)\n\n", req_len);
 
     bp_client_t *cl = NULL;
     if (bp_client_open(&cl) != BP_OK) { fprintf(stderr, "Open failed\n"); return 2; }
     bp_client_open_session(cl, NULL);
 
     mp_ctx_t ctx = {
-        .path          = path_bytes,
-        .path_size     = (uint16_t)path_len,
+        .req           = req_bytes,
+        .req_size      = (uint16_t)req_len,
         .resp_capacity = sizeof(ctx.resp_buf),
-        .service       = (uint8_t)service,
-        .class_or_misc = (uint16_t)class_or_misc,
+        .slot          = (uint8_t)slot,
+        .timeout_ms    = (uint16_t)timeout_ms,
     };
     bp_call_spec_t spec = {
         .fn_name      = "OCXcip_MessageSend",

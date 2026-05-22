@@ -1,11 +1,12 @@
 /*
- * identity.c — print the Identity object of a CIP device via two
- *              independent paths and confirm they agree.
+ * identity.c — print the Identity object of a CIP device.
  *
  *   1. bp_client_get_id_local()    — LOCAL cm1756 (no path)
  *   2. bp_client_get_device_id()   — REMOTE by text path, OEM-parsed
- *   3. bp_client_message_send()    — REMOTE by raw EPATH, hand-built
  *      (and dumps the active node table for context)
+ *
+ * For per-slot Identity via raw UCMM, see msgprobe with
+ * --req "01 02 20 01 24 01" (Get_Attributes_All on Identity).
  *
  * Usage:
  *   identity                    # local cm1756

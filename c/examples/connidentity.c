@@ -1,8 +1,7 @@
 /*
  * connidentity.c — query a device's Identity via class-3 connected
- *                  messaging (Phase 5).  Demonstrates that the
- *                  connected path DOES route to arbitrary backplane
- *                  slots, unlike bp_client_message_send.
+ *                  messaging (Phase 5).  UCMM equivalent is
+ *                  `msgprobe --slot N --req "01 02 20 01 24 01"`.
  *
  * Usage:
  *   connidentity              # default: slot 2 (L85)
