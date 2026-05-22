@@ -32,7 +32,8 @@ RUN mkdir -p /out/bin && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/connidentity ./cmd/connidentity && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/pathprobe    ./cmd/pathprobe    && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/actnodes     ./cmd/actnodes     && \
-    CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/modutil      ./cmd/modutil
+    CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/modutil      ./cmd/modutil      && \
+    CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/typetest     ./cmd/typetest
 
 # Runtime: distroless/cc carries glibc + dynamic loader (needed
 # because the binaries link against libpthread/librt via cgo for
