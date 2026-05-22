@@ -1,10 +1,10 @@
 // connidentity — query a device's Identity via class-3 connected
-// messaging (Phase 5).  Mirrors c/examples/connidentity.c CLI + output.
+// messaging.  Mirrors c/examples/connidentity.c CLI + output.
 //
-// STATUS: NOT FUNCTIONAL on cm1756 — the OCXCN_OpenClass3Connection
-// library is missing from the chip image, so OpenConn returns 0x1001.
-// This binary is kept for parity with the C tooling so the engine
-// failure path can still be diffed across languages.
+// v0.7.0+: Drives TxRxOpen + TxRxMsg + TxRxClose end-to-end against
+// a real PLC.  Internally the SDK builds Large Forward Open +
+// Forward_Close around the caller's Identity Get_Attributes_All
+// (svc 0x01) request, all via MessageSend.
 //
 // SPDX-License-Identifier: MIT
 package main
@@ -97,7 +97,7 @@ func printID(resp []byte) {
 
 func main() {
 	slot := flag.Int("slot", 2, "backplane slot number (default 2 = L85)")
-	connParams := flag.Int("conn-params", 0x43E8, "vendor conn params hint")
+	connParams := flag.Int("conn-params", 0, "O→T/T→O size in bytes; 0 = SDK default 4000")
 	pathHex := flag.String("path", "", "explicit EPATH bytes as hex; default = 01 <slot>")
 	appHandle := flag.Int("app-handle", 1, "caller-assigned app handle")
 	flag.Parse()
@@ -133,8 +133,11 @@ func main() {
 
 	connID, connSerial, oerr := client.TxRxOpen(spec)
 	orc := ocxbp.ErrCode(oerr)
-	fmt.Printf("[connidentity] txrx_open rc=%d (0x%x %s)  conn_id=0x%04x  serial=0x%04x\n",
-		orc, uint32(orc), ocxbp.Strerror(orc), connID, connSerial)
+	fmt.Printf("[connidentity] txrx_open rc=%d (%s)  conn_id=0x%04x  serial=0x%04x\n",
+		orc, ocxbp.Strerror(orc), connID, connSerial)
+	if oerr != nil {
+		os.Exit(1)
+	}
 
 	req := []byte{0x01, 0x02, 0x20, 0x01, 0x24, 0x01}
 	resp := make([]byte, 256)
@@ -142,6 +145,7 @@ func main() {
 	mrc := ocxbp.ErrCode(merr)
 	fmt.Printf("[connidentity] txrx_msg rc=%d (%s)  resp_len=%d\n",
 		mrc, ocxbp.Strerror(mrc), got)
+	ok := false
 	if merr == nil && got > 0 {
 		fmt.Print("response: ")
 		for _, b := range resp[:got] {
@@ -149,9 +153,14 @@ func main() {
 		}
 		fmt.Println()
 		printID(resp[:got])
+		ok = got >= 4 && resp[0] == 0x81 && resp[2] == 0x00
 	}
 
 	cerr := client.TxRxClose(spec)
 	crc := ocxbp.ErrCode(cerr)
 	fmt.Printf("[connidentity] txrx_close rc=%d (%s)\n", crc, ocxbp.Strerror(crc))
+
+	if !ok {
+		os.Exit(1)
+	}
 }

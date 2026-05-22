@@ -3,15 +3,33 @@
 package ocxbp
 
 import (
+	"sync"
+
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/cip"
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/shm"
 )
+
+// txrxState tracks one open class-3 connection.  Lookup is by
+// app_handle (the caller's key in cip.ConnSpec).  Lifecycle: created
+// in TxRxOpen, mutated by TxRxMsg (sequence counter for diagnostics),
+// removed in TxRxClose.
+type txrxState struct {
+	slot       uint8
+	connSerial uint16
+	vendorID   uint16
+	origSerial uint32
+	otConnID   uint32
+	toConnID   uint32
+	sequence   uint16 // diagnostic only — NOT on the wire
+}
 
 // Client is the public outbound-CIP handle. Wraps the IPC shm.Client
 // and the OCXcip_Open session handle (which is bookkeeping — the
 // wrapper tracks state via slot ownership, not the handle).
 type Client struct {
-	shm *shm.Client
+	shm     *shm.Client
+	txrxMu  sync.Mutex
+	txrxMap map[uint16]*txrxState
 }
 
 // Open maps /dev/shm/bpShmem and opens the 33 POSIX named semaphores
@@ -24,7 +42,7 @@ func Open() (*Client, error) {
 	if err != nil {
 		return nil, translateCallErr(err)
 	}
-	return &Client{shm: s}, nil
+	return &Client{shm: s, txrxMap: make(map[uint16]*txrxState)}, nil
 }
 
 // Close releases the IPC. Safe to call on nil.

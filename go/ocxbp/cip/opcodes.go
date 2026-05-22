@@ -67,14 +67,10 @@ const (
 	FnMessageSend        = "OCXcip_MessageSend"
 	SizeMessageSend uint32 = 0x32088
 
-	FnTxRxOpenConn        = "OCXcip_TxRxOpenConn"
-	SizeTxRxOpenConn uint32 = 0x188
-
-	FnTxRxMsg        = "OCXcip_TxRxMsg"
-	SizeTxRxMsg uint32 = 0x32190
-
-	FnTxRxCloseConn        = "OCXcip_TxRxCloseConn"
-	SizeTxRxCloseConn uint32 = 0x188
+	// OCXcip_TxRx* opcodes are NOT dispatched by the v0.7.0+ SDK —
+	// they resolve to OCXCN_* in a library missing from cm1756.
+	// The SDK builds Large Forward Open / Forward_Close bodies in
+	// cip/conn.go and sends them via OCXcip_MessageSend.
 
 	// ParsePath is a debug/RE opcode (not in the C public API).
 	// Surfaced for cmd/pathprobe; see c/examples/pathprobe.c.
