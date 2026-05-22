@@ -128,6 +128,50 @@ int main(int argc, char *argv[]) {
 
     int pass = (failed == 0) && (rc == BP_OK || rc == BP_ERR_GENERIC);
     printf("[multitagtest] SUMMARY ok=%d failed=%d total=%zu\n", ok, failed, count);
+
+    /* Phase 3 round-trip: write OCX_TEST, read back, restore.  Skips
+     * gracefully if OCX_TEST isn't on this PLC. */
+    bp_symbol_info_t ocx;
+    if (bp_tagdb_lookup_symbol(db, "OCX_TEST", &ocx) == BP_OK
+        && (ocx.data_type & 0x1FFF) == BP_TYPE_DINT) {
+        const char *write_names[1] = { "OCX_TEST" };
+        bp_value_t  read_back;
+        bp_value_t  write_value = { .kind = BP_VAL_DINT };
+
+        /* Snapshot original */
+        int32_t original = 0;
+        if (bp_tagdb_read_tags(db, write_names, 1, &read_back) == BP_OK) {
+            original = read_back.v.dint;
+            bp_value_clear(&read_back);
+        }
+
+        /* Write 0x12345678 */
+        write_value.v.dint = 0x12345678;
+        int wrc = bp_tagdb_write_tags(db, write_names, &write_value, 1);
+        printf("[multitagtest] write_tags OCX_TEST=0x12345678 rc=%d\n", wrc);
+
+        /* Read back */
+        memset(&read_back, 0, sizeof(read_back));
+        int rrc = bp_tagdb_read_tags(db, write_names, 1, &read_back);
+        int verified = (rrc == BP_OK && read_back.v.dint == 0x12345678);
+        printf("[multitagtest] read-after-write OCX_TEST=0x%08x verified=%s\n",
+               read_back.v.dint, verified ? "YES" : "NO");
+        bp_value_clear(&read_back);
+
+        /* Restore */
+        write_value.v.dint = original;
+        (void)bp_tagdb_write_tags(db, write_names, &write_value, 1);
+
+        /* Type-mismatch demonstration — should reject pre-IPC. */
+        bp_value_t bad = { .kind = BP_VAL_REAL, .v.real = 1.5f };
+        int brc = bp_tagdb_write_tags(db, write_names, &bad, 1);
+        printf("[multitagtest] type-mismatch reject rc=%d (expect -305)\n", brc);
+
+        if (!verified) pass = 0;
+    } else {
+        printf("[multitagtest] (skipped write roundtrip — OCX_TEST not found or not DINT)\n");
+    }
+
     printf("[multitagtest] %s\n", pass ? "PASS" : "FAIL");
 
     bp_tagdb_close(db);

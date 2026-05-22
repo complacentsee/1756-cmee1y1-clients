@@ -136,6 +136,48 @@ def _decode_scalar(kind: _ScalarKind, b: bytes) -> object:
     return fmt[1](v)
 
 
+def _encode_for_kind(kind: _ScalarKind, v: object) -> bytes | None:
+    """Encode a Python value as the wire bytes for a given scalar kind.
+    Returns None on type / range mismatch.
+
+    `bool` is checked BEFORE `int` because Python's bool inherits from
+    int — a careless isinstance(x, int) would accept True/False for
+    integer fields, masking bugs.
+    """
+    # BOOL: bool only.
+    if kind == "bool":
+        if isinstance(v, bool):
+            return b"\x01" if v else b"\x00"
+        return None
+    # Integer scalars: int only (not bool, even though bool < int).
+    if isinstance(v, bool):
+        # bool can't write to any integer field — caller probably
+        # passed True/False where they meant 1/0.
+        return None
+    ranges = {
+        "sint":  ("<b", -(1 << 7),  (1 << 7) - 1),
+        "usint": ("<B", 0,          (1 << 8) - 1),
+        "int":   ("<h", -(1 << 15), (1 << 15) - 1),
+        "uint":  ("<H", 0,          (1 << 16) - 1),
+        "dint":  ("<i", -(1 << 31), (1 << 31) - 1),
+        "udint": ("<I", 0,          (1 << 32) - 1),
+        "lint":  ("<q", -(1 << 63), (1 << 63) - 1),
+        "ulint": ("<Q", 0,          (1 << 64) - 1),
+    }
+    if kind in ranges:
+        if not isinstance(v, int):
+            return None
+        fmt, lo, hi = ranges[kind]
+        if v < lo or v > hi:
+            return None
+        return struct.pack(fmt, v)
+    if kind in ("real", "lreal"):
+        if not isinstance(v, (int, float)):
+            return None
+        return struct.pack("<f" if kind == "real" else "<d", float(v))
+    return None
+
+
 class TagDB:
     """Per-PLC tag-DB handle.  Construct via Client.open_tagdb(path)."""
 
@@ -542,6 +584,81 @@ class TagDB:
             err.statuses = statuses
             raise err
         return out
+
+    def write_tags(self, values: "dict[str, object]") -> None:
+        """Write a dict of name -> Python scalar to the PLC.
+
+        Each value is validated against the symbol's data_type before
+        any IPC.  Type rules:
+          BOOL  -> bool
+          [U]SINT/[U]INT/[U]DINT/[U]LINT  -> int (range-checked)
+          REAL/LREAL  -> float or int
+
+        Raises BpParamRange on type mismatch / unknown tag / array /
+        UDT.  Raises BpGeneric (with .statuses dict) if any per-tag
+        CIP General Status is non-zero.
+
+        Scope (v0.9.0): scalars only.
+        """
+        if values is None:
+            raise BpNullArg("values is required")
+        if not values:
+            return
+
+        names = list(values.keys())
+
+        # Pre-IPC validation + encoding.
+        encoded: list[bytes] = [b""] * len(names)
+        infos: list[Symbol] = []
+        for i, name in enumerate(names):
+            info = self.lookup_symbol(name)
+            if info.dim0 != 0 or info.struct_type != 0:
+                raise BpParamRange(
+                    f"write_tags: {name!r}: arrays/UDTs not supported in v0.9.0")
+            kind = _kind_for_atomic(info.data_type, info.elem_byte_size)
+            if kind is None:
+                raise BpParamRange(
+                    f"write_tags: {name!r}: unsupported data_type "
+                    f"0x{info.data_type:04x}")
+            b = _encode_for_kind(kind, values[name])
+            if b is None:
+                raise BpParamRange(
+                    f"write_tags: {name!r}: Python value {values[name]!r} "
+                    f"(type {type(values[name]).__name__}) doesn't match "
+                    f"kind {kind!r} (data_type 0x{info.data_type:04x})")
+            encoded[i] = b
+            infos.append(info)
+
+        statuses: dict[str, int] = {}
+        failed: list[str] = []
+
+        for start in range(0, len(names), 16):
+            chunk_names = names[start:start + 16]
+            chunk_infos = infos[start:start + 16]
+            chunk_enc   = encoded[start:start + 16]
+            reqs = [
+                TagRequest(
+                    tag_name=name,
+                    data_type=info.data_type,
+                    elem_byte_size=info.elem_byte_size,
+                    action=P.ACTION_WRITE,
+                    elem_count=1,
+                    data=enc,
+                )
+                for name, info, enc in zip(chunk_names, chunk_infos, chunk_enc)
+            ]
+            self.access(reqs)
+            for name, req in zip(chunk_names, reqs):
+                statuses[name] = req.result
+                if req.result != 0:
+                    failed.append(name)
+
+        if failed:
+            err = BpGeneric(
+                f"write_tags: {len(failed)} tag(s) returned non-zero "
+                f"CIP status (first: {failed[0]!r}): {', '.join(failed)}")
+            err.statuses = statuses
+            raise err
 
     # ============================================================
     # Array helpers

@@ -721,6 +721,38 @@ int bp_tagdb_read_tags(bp_tagdb_t *db,
                         const char *const *names, size_t count,
                         bp_value_t *out_values);
 
+/* bp_tagdb_write_tags
+ *   Writes `count` scalar values to their named tags in one batched
+ *   OCXcip_AccessTagData (chunked at 16 to stay inside the engine's
+ *   per-call cap).  Each values[i].kind MUST match the cached
+ *   symbol's data_type; mismatches are rejected before any IPC with
+ *   BP_ERR_PARAM_RANGE (the failing index is logged to stderr).
+ *
+ *   Caller fills:
+ *     values[i].kind  — must match symbol (BP_VAL_DINT for a DINT
+ *                       tag, etc.).  BP_VAL_NONE / mismatched kind
+ *                       → BP_ERR_PARAM_RANGE.
+ *     values[i].v.*   — the value itself (the union member matching
+ *                       .kind).
+ *
+ *   SDK populates:
+ *     values[i].cip_status — CIP General Status of this write.
+ *
+ *   Returns:
+ *     BP_OK            — all writes succeeded.
+ *     BP_ERR_GENERIC   — at least one per-tag CIP General Status
+ *                        was non-zero.
+ *     BP_ERR_PARAM_RANGE — type mismatch / unknown symbol / array
+ *                          or UDT (scalars only in v0.9.0).
+ *     other negative rc — IPC / system errors.
+ *
+ *   STRING values aren't supported in v0.9.0 (paired with the
+ *   read_tags scope decision); callers needing STRING writes use
+ *   bp_tagdb_write_string explicitly. */
+int bp_tagdb_write_tags(bp_tagdb_t *db,
+                         const char *const *names,
+                         bp_value_t *values, size_t count);
+
 /* Symbol-info accessors — convenience wrappers around the bit math. */
 int      bp_symbol_is_array (const bp_symbol_info_t *info);  /* 1 = array,  0 = scalar */
 int      bp_symbol_is_struct(const bp_symbol_info_t *info);  /* 1 = UDT,   0 = atomic */

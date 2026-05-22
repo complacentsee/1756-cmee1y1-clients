@@ -140,6 +140,45 @@ def main() -> int:
             print(f"[multitagtest] SUMMARY ok={ok} failed={failed} "
                   f"total={len(names)}")
             passed = failed == 0
+
+            # Phase 3 round-trip: write OCX_TEST, read back, restore.
+            try:
+                sym = db.lookup_symbol("OCX_TEST")
+                if (sym.data_type & 0x1FFF) != P.TYPE_DINT:
+                    raise bpclient.BpParamRange("OCX_TEST is not DINT")
+            except Exception:
+                print("[multitagtest] (skipped write roundtrip — "
+                      "OCX_TEST not found or not DINT)")
+            else:
+                before = db.read_tags(["OCX_TEST"])
+                original = before["OCX_TEST"]
+
+                try:
+                    db.write_tags({"OCX_TEST": 0x12345678})
+                    rc = 0
+                except Exception as e:
+                    rc = bpclient.err_code(e)
+                print(f"[multitagtest] write_tags OCX_TEST=0x12345678 rc={rc}")
+
+                after = db.read_tags(["OCX_TEST"])
+                verified = after["OCX_TEST"] == 0x12345678
+                print(f"[multitagtest] read-after-write OCX_TEST="
+                      f"0x{after['OCX_TEST'] & 0xFFFFFFFF:08x} "
+                      f"verified={'YES' if verified else 'NO'}")
+
+                db.write_tags({"OCX_TEST": original})
+
+                try:
+                    db.write_tags({"OCX_TEST": 1.5})
+                    brc = 0
+                except Exception as e:
+                    brc = bpclient.err_code(e)
+                print(f"[multitagtest] type-mismatch reject rc={brc} "
+                      f"(expect -305)")
+
+                if not verified:
+                    passed = False
+
             print(f"[multitagtest] {'PASS' if passed else 'FAIL'}")
             return 0 if passed else 1
         finally:

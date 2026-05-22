@@ -150,11 +150,11 @@ func (db *TagDB) ReadTags(names []string) (map[string]TagReadResult, error) {
 			return nil, fmt.Errorf("ocxbp: ReadTags: %q: %w", name, err)
 		}
 		if info.Dim0 != 0 || info.StructType != 0 {
-			return nil, fmt.Errorf("ocxbp: ReadTags: %q: arrays/UDTs not supported in v0.9.0 (use ReadDINTArray / ReadString)", name)
+			return nil, fmt.Errorf("ocxbp: ReadTags: %q: arrays/UDTs not supported in v0.9.0 (use ReadDINTArray / ReadString): %w", name, ErrParamRange)
 		}
 		kind := kindForAtomic(info.DataType, info.ElemByteSize)
 		if kind == kindNone {
-			return nil, fmt.Errorf("ocxbp: ReadTags: %q: unsupported data_type 0x%04x", name, info.DataType)
+			return nil, fmt.Errorf("ocxbp: ReadTags: %q: unsupported data_type 0x%04x: %w", name, info.DataType, ErrParamRange)
 		}
 		kinds[i] = kind
 		infos[i] = info
@@ -202,4 +202,180 @@ func (db *TagDB) ReadTags(names []string) (map[string]TagReadResult, error) {
 			len(failedNames), failedNames[0], strings.Join(failedNames, ", "))
 	}
 	return out, nil
+}
+
+// TagWriteResult is one entry's outcome in a WriteTags call.
+type TagWriteResult struct {
+	CIPStatus uint32
+}
+
+// encodeForKind encodes `v` into a small byte buffer matching the
+// given scalar kind.  Returns the bytes + true on success, nil +
+// false if `v`'s Go type doesn't match the expected kind or is out
+// of range for the destination type.
+func encodeForKind(kind scalarKind, v interface{}) ([]byte, bool) {
+	switch kind {
+	case kindBool:
+		b, ok := v.(bool)
+		if !ok {
+			return nil, false
+		}
+		if b {
+			return []byte{1}, true
+		}
+		return []byte{0}, true
+	case kindSint:
+		switch x := v.(type) {
+		case int8:
+			return []byte{byte(x)}, true
+		}
+	case kindUsint:
+		switch x := v.(type) {
+		case uint8:
+			return []byte{x}, true
+		}
+	case kindInt:
+		if x, ok := v.(int16); ok {
+			b := make([]byte, 2)
+			binary.LittleEndian.PutUint16(b, uint16(x))
+			return b, true
+		}
+	case kindUint:
+		if x, ok := v.(uint16); ok {
+			b := make([]byte, 2)
+			binary.LittleEndian.PutUint16(b, x)
+			return b, true
+		}
+	case kindDint:
+		if x, ok := v.(int32); ok {
+			b := make([]byte, 4)
+			binary.LittleEndian.PutUint32(b, uint32(x))
+			return b, true
+		}
+	case kindUdint:
+		if x, ok := v.(uint32); ok {
+			b := make([]byte, 4)
+			binary.LittleEndian.PutUint32(b, x)
+			return b, true
+		}
+	case kindReal:
+		if x, ok := v.(float32); ok {
+			b := make([]byte, 4)
+			binary.LittleEndian.PutUint32(b, math.Float32bits(x))
+			return b, true
+		}
+		// Accept float64 → float32 if it fits cleanly.
+		if x, ok := v.(float64); ok {
+			f := float32(x)
+			b := make([]byte, 4)
+			binary.LittleEndian.PutUint32(b, math.Float32bits(f))
+			return b, true
+		}
+	case kindLint:
+		if x, ok := v.(int64); ok {
+			b := make([]byte, 8)
+			binary.LittleEndian.PutUint64(b, uint64(x))
+			return b, true
+		}
+	case kindUlint:
+		if x, ok := v.(uint64); ok {
+			b := make([]byte, 8)
+			binary.LittleEndian.PutUint64(b, x)
+			return b, true
+		}
+	case kindLreal:
+		if x, ok := v.(float64); ok {
+			b := make([]byte, 8)
+			binary.LittleEndian.PutUint64(b, math.Float64bits(x))
+			return b, true
+		}
+		if x, ok := v.(float32); ok {
+			b := make([]byte, 8)
+			binary.LittleEndian.PutUint64(b, math.Float64bits(float64(x)))
+			return b, true
+		}
+	}
+	return nil, false
+}
+
+// WriteTags writes `values` (a map of tag name → typed Go value) to
+// the PLC.  Each value's Go type must match the symbol's data_type
+// (int32 for DINT, float32 for REAL, bool for BOOL, etc.); mismatches
+// are rejected pre-IPC with ErrParamRange and a stderr line naming
+// the failing tag.
+//
+// Returns nil if all writes succeeded; an error naming the first
+// failing tag if any per-tag CIP General Status is non-zero.
+//
+// Scope (v0.9.0): scalars only.  Arrays, UDTs, STRING family raise
+// ErrParamRange before any IPC.
+func (db *TagDB) WriteTags(values map[string]interface{}) error {
+	if db == nil {
+		return ErrNullArg
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	// Order matters for chunking — collect keys in a stable order.
+	names := make([]string, 0, len(values))
+	for k := range values {
+		names = append(names, k)
+	}
+
+	// Pre-IPC validation + encoding.
+	encoded := make([][]byte, len(names))
+	infos := make([]SymbolInfo, len(names))
+	for i, name := range names {
+		info, err := db.LookupSymbol(name)
+		if err != nil {
+			return fmt.Errorf("ocxbp: WriteTags: %q: %w", name, err)
+		}
+		if info.Dim0 != 0 || info.StructType != 0 {
+			return fmt.Errorf("ocxbp: WriteTags: %q: arrays/UDTs not supported in v0.9.0: %w", name, ErrParamRange)
+		}
+		kind := kindForAtomic(info.DataType, info.ElemByteSize)
+		if kind == kindNone {
+			return fmt.Errorf("ocxbp: WriteTags: %q: unsupported data_type 0x%04x: %w", name, info.DataType, ErrParamRange)
+		}
+		b, ok := encodeForKind(kind, values[name])
+		if !ok {
+			return fmt.Errorf("ocxbp: WriteTags: %q: Go value type %T doesn't match symbol kind %d (data_type 0x%04x): %w",
+				name, values[name], int(kind), info.DataType, ErrParamRange)
+		}
+		encoded[i] = b
+		infos[i] = info
+	}
+
+	var failedNames []string
+	for start := 0; start < len(names); start += readTagsBatchCap {
+		end := start + readTagsBatchCap
+		if end > len(names) {
+			end = len(names)
+		}
+		reqs := make([]TagRequest, end-start)
+		for j := range reqs {
+			i := start + j
+			reqs[j] = TagRequest{
+				TagName:      names[i],
+				DataType:     infos[i].DataType,
+				ElemByteSize: uint16(infos[i].ElemByteSize),
+				Action:       ActionWrite,
+				ElemCount:    1,
+				Data:         encoded[i],
+			}
+		}
+		if err := db.Access(reqs); err != nil {
+			return fmt.Errorf("ocxbp: WriteTags: AccessTagData chunk failed: %w", err)
+		}
+		for j := range reqs {
+			if reqs[j].Result != 0 {
+				failedNames = append(failedNames, reqs[j].TagName)
+			}
+		}
+	}
+	if len(failedNames) > 0 {
+		return fmt.Errorf("ocxbp: WriteTags: %d tag(s) returned non-zero CIP status (first: %q): %s",
+			len(failedNames), failedNames[0], strings.Join(failedNames, ", "))
+	}
+	return nil
 }

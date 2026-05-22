@@ -15,6 +15,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -161,5 +162,147 @@ int bp_tagdb_read_tags(bp_tagdb_t *db,
 cleanup:
     for (size_t i = 0; i < count; i++) free(bufs[i]);
     free(requests); free(kinds); free(bufs);
+    return rc;
+}
+
+/* ────────── write_tags (v0.9.0 Phase 3) ─────────────────────── */
+
+/* Encode a scalar value into a small fixed buffer (max 8 bytes).
+ * Caller-supplied `out` must be at least `expected_size` bytes.
+ * Returns 1 on success, 0 if the kind doesn't fit `expected_size`. */
+static int encode_scalar(const bp_value_t *v, uint32_t expected_size,
+                          uint8_t out[8]) {
+    switch (v->kind) {
+    case BP_VAL_BOOL:
+        if (expected_size != 1) return 0;
+        out[0] = v->v.boolean ? 1 : 0;
+        return 1;
+    case BP_VAL_SINT:
+        if (expected_size != 1) return 0;
+        out[0] = (uint8_t)v->v.sint;
+        return 1;
+    case BP_VAL_USINT:
+        if (expected_size != 1) return 0;
+        out[0] = v->v.usint;
+        return 1;
+    case BP_VAL_INT:
+        if (expected_size != 2) return 0;
+        bp_st_u16(out, (uint16_t)v->v.int_);
+        return 1;
+    case BP_VAL_UINT:
+        if (expected_size != 2) return 0;
+        bp_st_u16(out, v->v.uint);
+        return 1;
+    case BP_VAL_DINT:
+        if (expected_size != 4) return 0;
+        bp_st_u32(out, (uint32_t)v->v.dint);
+        return 1;
+    case BP_VAL_UDINT:
+        if (expected_size != 4) return 0;
+        bp_st_u32(out, v->v.udint);
+        return 1;
+    case BP_VAL_REAL: {
+        if (expected_size != 4) return 0;
+        uint32_t u; memcpy(&u, &v->v.real, 4);
+        bp_st_u32(out, u);
+        return 1;
+    }
+    case BP_VAL_LINT: {
+        if (expected_size != 8) return 0;
+        uint64_t u = (uint64_t)v->v.lint;
+        bp_st_u32(out,     (uint32_t)(u));
+        bp_st_u32(out + 4, (uint32_t)(u >> 32));
+        return 1;
+    }
+    case BP_VAL_ULINT: {
+        if (expected_size != 8) return 0;
+        uint64_t u = v->v.ulint;
+        bp_st_u32(out,     (uint32_t)(u));
+        bp_st_u32(out + 4, (uint32_t)(u >> 32));
+        return 1;
+    }
+    case BP_VAL_LREAL: {
+        if (expected_size != 8) return 0;
+        uint64_t u; memcpy(&u, &v->v.lreal, 8);
+        bp_st_u32(out,     (uint32_t)(u));
+        bp_st_u32(out + 4, (uint32_t)(u >> 32));
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
+int bp_tagdb_write_tags(bp_tagdb_t *db,
+                         const char *const *names,
+                         bp_value_t *values, size_t count) {
+    if (!db || !names || !values) return BP_ERR_NULL_ARG;
+    if (count == 0) return BP_OK;
+
+    bp_tag_request_t *requests = calloc(count, sizeof(*requests));
+    uint8_t         (*bufs)[8] = calloc(count, sizeof(*bufs));
+    if (!requests || !bufs) {
+        free(requests); free(bufs);
+        return BP_ERR_CLIENT_OPEN;
+    }
+
+    int rc = BP_OK;
+    for (size_t i = 0; i < count; i++) {
+        values[i].cip_status = 0;
+
+        bp_symbol_info_t sym;
+        rc = bp_tagdb_lookup_symbol(db, names[i], &sym);
+        if (rc != BP_OK) {
+            fprintf(stderr, "[bp_tagdb_write_tags] %s: lookup rc=%d\n",
+                    names[i], rc);
+            goto cleanup;
+        }
+        if (sym.dim0 != 0 || sym.struct_type != 0) {
+            fprintf(stderr, "[bp_tagdb_write_tags] %s: arrays/UDTs not supported\n",
+                    names[i]);
+            rc = BP_ERR_PARAM_RANGE;
+            goto cleanup;
+        }
+        bp_value_kind_t expected = kind_for_atomic(sym.data_type, sym.elem_byte_size);
+        if (expected == BP_VAL_NONE) {
+            fprintf(stderr, "[bp_tagdb_write_tags] %s: unsupported data_type 0x%04x\n",
+                    names[i], sym.data_type);
+            rc = BP_ERR_PARAM_RANGE;
+            goto cleanup;
+        }
+        if (values[i].kind != expected) {
+            fprintf(stderr, "[bp_tagdb_write_tags] %s: type mismatch — "
+                            "symbol expects kind=%d (data_type=0x%04x), caller supplied kind=%d\n",
+                    names[i], (int)expected, sym.data_type, (int)values[i].kind);
+            rc = BP_ERR_PARAM_RANGE;
+            goto cleanup;
+        }
+        if (!encode_scalar(&values[i], sym.elem_byte_size, bufs[i])) {
+            fprintf(stderr, "[bp_tagdb_write_tags] %s: encoder rejected value\n",
+                    names[i]);
+            rc = BP_ERR_PARAM_RANGE;
+            goto cleanup;
+        }
+        requests[i].tag_name       = names[i];
+        requests[i].data_type      = sym.data_type;
+        requests[i].elem_byte_size = (uint16_t)sym.elem_byte_size;
+        requests[i].action         = BP_ACTION_WRITE;
+        requests[i].elem_count     = 1;
+        requests[i].data           = bufs[i];
+        requests[i].result         = 0;
+    }
+
+    rc = bp_tagdb_access(db, requests, count);
+    if (rc != BP_OK) goto cleanup;
+
+    int any_failed = 0;
+    for (size_t i = 0; i < count; i++) {
+        values[i].cip_status = requests[i].result;
+        if (requests[i].result != 0) any_failed = 1;
+    }
+    rc = any_failed ? BP_ERR_GENERIC : BP_OK;
+
+cleanup:
+    free(requests); free(bufs);
     return rc;
 }

@@ -132,10 +132,55 @@ func main() {
 	}
 	pass := failed == 0
 	fmt.Printf("[multitagtest] SUMMARY ok=%d failed=%d total=%d\n", ok, failed, len(names))
+
+	// Phase 3 round-trip: write OCX_TEST, read back, restore.
+	if sym, lerr := db.LookupSymbol("OCX_TEST"); lerr == nil &&
+		(sym.DataType&0x1FFF) == uint16(ocxbp.TypeDint) {
+		readBack, _ := db.ReadTags([]string{"OCX_TEST"})
+		var original int32
+		if v, ok := readBack["OCX_TEST"].Value.(int32); ok {
+			original = v
+		}
+		werr := db.WriteTags(map[string]interface{}{"OCX_TEST": int32(0x12345678)})
+		rc := 0
+		if werr != nil {
+			rc = ocxbp.ErrCode(werr)
+		}
+		fmt.Printf("[multitagtest] write_tags OCX_TEST=0x12345678 rc=%d\n", rc)
+
+		after, _ := db.ReadTags([]string{"OCX_TEST"})
+		v32, _ := after["OCX_TEST"].Value.(int32)
+		verified := v32 == int32(0x12345678)
+		fmt.Printf("[multitagtest] read-after-write OCX_TEST=0x%08x verified=%s\n",
+			uint32(v32), boolString(verified))
+
+		_ = db.WriteTags(map[string]interface{}{"OCX_TEST": original})
+
+		berr := db.WriteTags(map[string]interface{}{"OCX_TEST": float32(1.5)})
+		brc := 0
+		if berr != nil {
+			brc = ocxbp.ErrCode(berr)
+		}
+		fmt.Printf("[multitagtest] type-mismatch reject rc=%d (expect -305)\n", brc)
+
+		if !verified {
+			pass = false
+		}
+	} else {
+		fmt.Println("[multitagtest] (skipped write roundtrip — OCX_TEST not found or not DINT)")
+	}
+
 	if pass {
 		fmt.Println("[multitagtest] PASS")
 	} else {
 		fmt.Println("[multitagtest] FAIL")
 		os.Exit(1)
 	}
+}
+
+func boolString(b bool) string {
+	if b {
+		return "YES"
+	}
+	return "NO"
 }
