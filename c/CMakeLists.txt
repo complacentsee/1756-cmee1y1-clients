@@ -20,6 +20,7 @@ set(LIB_SOURCES
     src/tagdb.c
     src/access.c
     src/errors.c
+    src/message.c
 )
 
 # Shared library
@@ -28,7 +29,7 @@ target_link_libraries(bpclient PRIVATE pthread rt)
 set_target_properties(bpclient PROPERTIES
     PUBLIC_HEADER include/bpclient.h
     SOVERSION 0
-    VERSION 0.2.0
+    VERSION 0.3.0
 )
 
 # Static library (same sources, different target)
@@ -71,6 +72,15 @@ target_link_libraries(symprobe PRIVATE bpclient pthread rt)
 add_executable(testtagver examples/testtagver.c)
 target_link_libraries(testtagver PRIVATE bpclient pthread rt)
 
+# Example: msgprobe — manual OCXcip_MessageSend invocation (diagnostic /
+# RE tool — used to characterize Phase 3 wire format)
+add_executable(msgprobe examples/msgprobe.c)
+target_link_libraries(msgprobe PRIVATE bpclient pthread rt)
+
+# Example: identity — query a device's CIP Identity via Get_Attribute_All
+add_executable(identity examples/identity.c)
+target_link_libraries(identity PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -91,5 +101,7 @@ install(TARGETS
             structprobe
             symprobe
             testtagver
+            msgprobe
+            identity
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

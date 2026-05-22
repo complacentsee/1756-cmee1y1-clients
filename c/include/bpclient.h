@@ -92,6 +92,49 @@ void bp_client_close(bp_client_t *client);
 int  bp_client_open_session(bp_client_t *client, uint32_t *out_handle);
 
 /* ============================================================
+ * Explicit (UCMM) messaging — bp_client_message_send
+ *
+ * One unconnected CIP request, raw path + service.  The OEM wrapper
+ * permits service codes < 0x14 only and on the cm1756 only certain
+ * service/class combinations actually round-trip cleanly to a
+ * remote device — most notably **Get_Attribute_All (0x01)**.
+ * Get_Attribute_Single (0x0E) is rejected with rc=3 across all
+ * tested attribute paths; the OEM exposes dedicated wrappers
+ * (OCXcip_GetIdObject, OCXcip_GetSwitchPosition, etc.) for those
+ * use cases rather than going through MessageSend.  See
+ * docs/protocol.md for the wire format and exploration notes.
+ *
+ * `encoded_path` is the raw CIP EPATH — caller-built.  For a route
+ * to slot 2 + class 1 instance 1 use:
+ *   uint8_t epath[] = {0x01, 0x02, 0x20, 0x01, 0x24, 0x01};
+ * `class_or_misc` is informational — the engine validates it but
+ * does not reshape the path from it; passing the class ID in this
+ * field is the OEM convention.
+ * ============================================================ */
+
+typedef struct {
+    const uint8_t *encoded_path;   /* raw CIP EPATH bytes, max 500 */
+    uint16_t       path_size;      /* byte count of encoded_path */
+    uint8_t        service;        /* CIP service code (engine requires < 0x14) */
+    uint16_t       class_or_misc;  /* class word; low 16 bits significant */
+    uint16_t       resp_capacity;  /* in: caller's buffer size (MUST be > 0) */
+    void          *resp_data;      /* in: caller-allocated buffer */
+    uint16_t       resp_len;       /* out: actual response bytes server wrote */
+    uint32_t       status;         /* out: wrapper status field */
+} bp_message_t;
+
+/* bp_client_message_send
+ *   Returns BP_OK if the message round-tripped, regardless of CIP
+ *   General Status — caller must inspect the first ~4 bytes of
+ *   resp_data for the CIP response header (service_reply, reserved,
+ *   general_status, additional_status_size).  Negative return =
+ *   transport error.  Positive return (1, 3, ...) = engine-side
+ *   rejection before the wire (1 = bad param, 3 = engine refused
+ *   for the given service/class combination).
+ */
+int bp_client_message_send(bp_client_t *client, bp_message_t *msg);
+
+/* ============================================================
  * Tag database
  * ============================================================ */
 

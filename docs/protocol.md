@@ -280,6 +280,71 @@ RESPONSE:
 The C SDK's `bp_tagdb_test_version` collapses `0x14` and `0x15` into
 `*out_changed = 1`; both signal the caller to call `bp_tagdb_build`.
 
+### `OCXcip_MessageSend` — one explicit (UCMM) CIP request
+
+Sends a single unconnected CIP request and waits for the response.
+Most useful for **Get_Attribute_All** (service `0x01`) against
+ControlLogix objects.  Other services rarely round-trip cleanly
+through this API on the cm1756 — see the limitations note below.
+
+```
+fn_name        = "OCXcip_MessageSend"
+payload_size   = 0x32088
+
+REQUEST PAYLOAD:
+  slot + 0x00078  uint8[]  encoded_path        raw CIP EPATH bytes (path_size bytes)
+  slot + 0x19078  uint16   path_size           byte count of encoded_path (1..500)
+  slot + 0x3207a  uint16   resp_capacity (in)  caller buffer size (must be > 0)
+  slot + 0x32080  uint8    service             CIP service code (engine requires < 0x14)
+  slot + 0x32082  uint16   class_or_misc       class word (low 16 bits significant)
+
+RESPONSE PAYLOAD:
+  slot + 0x1907a  uint8[]  response data       up to resp_len bytes; raw CIP response
+                                               (service_reply | 0x80, reserved, general_status, ...)
+  slot + 0x3207a  uint16   resp_len  (out)     bytes the engine wrote
+  slot + 0x3207c  uint32   status    (out)     wrapper status field
+  slot + 0x50     int32    errorcode           normal slot semantics
+```
+
+**`encoded_path` is caller-built raw CIP EPATH.**  Standard segments:
+
+| Segment | Wire | Purpose |
+|---|---|---|
+| Port (8-bit link) | `0x_p, link` | route via port _p_ to link addr |
+| Logical 8-bit Class | `0x20, classID` | select class |
+| Logical 16-bit Class | `0x21, 0x00, lo, hi` | select class (>= 256) |
+| Logical 8-bit Instance | `0x24, instID` | select instance |
+| Logical 16-bit Instance | `0x25, 0x00, lo, hi` | select instance (>= 256) |
+| Logical 8-bit Attribute | `0x30, attrID` | select attribute |
+
+Example — Identity Get_Attribute_All on backplane slot 2:
+```c
+uint8_t epath[] = { 0x01, 0x02,        /* port 1 (backplane), slot 2 */
+                    0x20, 0x01,        /* class 1 (Identity) */
+                    0x24, 0x01 };      /* instance 1 */
+bp_message_t msg = {
+    .encoded_path = epath, .path_size = sizeof(epath),
+    .service = 0x01, .class_or_misc = 0x0001,
+    .resp_data = buf, .resp_capacity = sizeof(buf),
+};
+bp_client_message_send(client, &msg);
+```
+
+**Tested service support on cm1756 + L85E:**
+
+| Service | Result | Notes |
+|---|---|---|
+| `0x01` Get_Attribute_All | ✓ works | Returns full CIP Get_Attribute_All response (service_reply `0x81`, then attribute data) |
+| `0x0E` Get_Attribute_Single | ✗ rc=3 | Wrapper / engine rejects across all tested paths.  The OEM library exposes dedicated wrappers (`OCXcip_GetIdObject`, `OCXcip_GetSwitchPosition`, etc.) instead. |
+| Service code >= `0x14` (20) | rc=1 | Engine pre-flight rejection (`OC_bpMessageSend` validates `service < 0x14`). |
+
+The rc=3 for Get_Attribute_Single is consistent across local and
+backplane-routed requests, across multiple paths (with/without
+8-bit vs 16-bit attribute segments), and across multiple classes.
+We believe this is intentional OEM behavior — MessageSend is for
+"object-level" Get_Attribute_All queries; per-attribute reads go
+via the dedicated OCXcip_* helpers (Phase 4).
+
 ### `OCXcip_DeleteTagDbHandle` — release the tag DB
 
 ```
