@@ -70,6 +70,10 @@ class Client:
         # v0.8.0+ per-slot connection pools.  See pool_open / pool_txrx.
         self._pools_mu = threading.Lock()
         self._pools: dict[int, _Pool] = {}
+        # v0.9.0+ per-PLC symbol cache, keyed on the OldI CIP path.
+        # Shared across all TagDB handles to the same path.
+        self._tag_cache_mu = threading.Lock()
+        self._tag_caches: dict[str, _TagCache] = {}
 
     @property
     def raw(self) -> _RawClient:
@@ -822,6 +826,99 @@ class _Pool:
         self.inflight = 0
         self.inflight_lock = threading.Lock()
         self.inflight_zero = threading.Condition(self.inflight_lock)
+
+
+class _TagCache:
+    """Per-PLC symbol cache (v0.9.0).  Mirrors C's struct bp_tag_cache
+    and Go's tagCache."""
+
+    def __init__(self) -> None:
+        self.mu = threading.Lock()
+        self.symbols: "list[Symbol]" = []
+        self.known_count = 0
+        self.total_count = 0
+
+
+def _bind_tag_cache_methods() -> None:
+    """Attach the cache helpers to Client lazily, after _TagCache is
+    defined.  Python class bodies are evaluated top-to-bottom; binding
+    here avoids forward-reference gymnastics."""
+    from .tagdb import Symbol  # noqa: E402
+
+    def _find_or_alloc_tag_cache(self, path: str) -> _TagCache:
+        with self._tag_cache_mu:
+            tc = self._tag_caches.get(path)
+            if tc is None:
+                tc = _TagCache()
+                self._tag_caches[path] = tc
+            return tc
+
+    def _reset_tag_cache_after_build(self, path: str, total_count: int) -> None:
+        tc = self._find_or_alloc_tag_cache(path)
+        with tc.mu:
+            tc.symbols = [Symbol() for _ in range(total_count)] if total_count > 0 else []
+            tc.known_count = 0
+            tc.total_count = total_count
+
+    def _lookup_cached_symbol(self, db, name: str) -> Symbol:
+        tc = self._find_or_alloc_tag_cache(db.path)
+        tc.mu.acquire()
+        try:
+            if tc.total_count == 0 and not tc.symbols:
+                raise BpParamRange(
+                    "lookup before build (or PLC has no tags)")
+            for i in range(tc.known_count):
+                if tc.symbols[i].name == name:
+                    return tc.symbols[i]
+            # Lazy fill: walk symbol_at until we find a match.  Release
+            # the cache mutex around each IPC call so parallel lookups
+            # for already-cached names don't block on us.
+            while tc.known_count < tc.total_count:
+                idx = tc.known_count
+                tc.mu.release()
+                try:
+                    sym = db.symbol_at(idx)
+                finally:
+                    tc.mu.acquire()
+                if idx == tc.known_count and tc.known_count < len(tc.symbols):
+                    tc.symbols[tc.known_count] = sym
+                    tc.known_count += 1
+                for i in range(idx, tc.known_count):
+                    if tc.symbols[i].name == name:
+                        return tc.symbols[i]
+            raise BpParamRange(
+                f"symbol {name!r} not found in PLC tag table")
+        finally:
+            tc.mu.release()
+
+    def _preload_cached_symbols(self, db) -> int:
+        tc = self._find_or_alloc_tag_cache(db.path)
+        tc.mu.acquire()
+        try:
+            if tc.total_count == 0 and not tc.symbols:
+                raise BpParamRange(
+                    "preload before build (or PLC has no tags)")
+            while tc.known_count < tc.total_count:
+                idx = tc.known_count
+                tc.mu.release()
+                try:
+                    sym = db.symbol_at(idx)
+                finally:
+                    tc.mu.acquire()
+                if idx == tc.known_count and tc.known_count < len(tc.symbols):
+                    tc.symbols[tc.known_count] = sym
+                    tc.known_count += 1
+            return tc.known_count
+        finally:
+            tc.mu.release()
+
+    Client._find_or_alloc_tag_cache = _find_or_alloc_tag_cache
+    Client._reset_tag_cache_after_build = _reset_tag_cache_after_build
+    Client._lookup_cached_symbol = _lookup_cached_symbol
+    Client._preload_cached_symbols = _preload_cached_symbols
+
+
+_bind_tag_cache_methods()
 
 
 # Re-import to avoid a circular ref at module top.

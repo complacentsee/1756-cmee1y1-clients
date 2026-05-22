@@ -32,6 +32,11 @@ type Client struct {
 	txrxMap map[uint16]*txrxState
 	poolsMu sync.Mutex
 	pools   [PoolMaxSlots]*pool
+	// v0.9.0 per-PLC symbol cache, keyed on the OldI CIP path.  Shared
+	// across all TagDB handles to the same path on this client.  See
+	// tagcache.go for the cache shape and lookup semantics.
+	tagCacheMu sync.Mutex
+	tagCaches  map[string]*tagCache
 }
 
 // Open maps /dev/shm/bpShmem and opens the 33 POSIX named semaphores
@@ -44,7 +49,11 @@ func Open() (*Client, error) {
 	if err != nil {
 		return nil, translateCallErr(err)
 	}
-	return &Client{shm: s, txrxMap: make(map[uint16]*txrxState)}, nil
+	return &Client{
+		shm:       s,
+		txrxMap:   make(map[uint16]*txrxState),
+		tagCaches: make(map[string]*tagCache),
+	}, nil
 }
 
 // Close releases the IPC. Safe to call on nil.  Any open pools are

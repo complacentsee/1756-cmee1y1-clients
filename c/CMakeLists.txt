@@ -26,6 +26,7 @@ set(LIB_SOURCES
     src/conn.c
     src/pool.c
     src/route.c
+    src/tagcache.c
 )
 
 # Shared library
@@ -125,6 +126,11 @@ target_link_libraries(pooltest PRIVATE bpclient pthread rt)
 add_executable(routedident examples/routedident.c)
 target_link_libraries(routedident PRIVATE bpclient pthread rt)
 
+# Example: symcache — v0.9.0 symbol-cache validator
+# (lookup_symbol cold + warm + after preload_symbols).
+add_executable(symcache examples/symcache.c)
+target_link_libraries(symcache PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -155,5 +161,6 @@ install(TARGETS
             conntest
             pooltest
             routedident
+            symcache
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

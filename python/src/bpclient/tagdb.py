@@ -127,7 +127,13 @@ class TagDB:
     # Build / TestVersion / SymbolAt / StructInfo / StructMember
     # ============================================================
     def build(self) -> int:
-        """OCXcip_BuildTagDb: returns the enumerated symbol count."""
+        """OCXcip_BuildTagDb: returns the enumerated symbol count.
+
+        On success, invalidates the per-PLC symbol cache for this
+        path and resizes it for the fresh table.  Lazy fill kicks
+        in on the next ``lookup_symbol``; call ``preload_symbols``
+        for eager warm-up.
+        """
         h = self._handle
         n = 0
 
@@ -140,7 +146,33 @@ class TagDB:
 
         self._client.raw.call("OCXcip_BuildTagDb", 0x80,
                               fill=fill, read=read, timeout_ms=30000)
+        self._client._reset_tag_cache_after_build(self._path, n)
         return n
+
+    def lookup_symbol(self, name: str) -> Symbol:
+        """Look up a symbol by name via the per-client cache.
+
+        First call after ``build`` for a never-before-seen name walks
+        ``symbol_at`` incrementally until a match is found (each
+        examined symbol is appended to the cache so subsequent
+        lookups are array scans, not IPC round-trips).
+
+        Raises BpParamRange if the name isn't in the PLC's tag table
+        (or build hasn't populated the cache yet).
+        """
+        if not name:
+            raise BpNullArg("name is required")
+        return self._client._lookup_cached_symbol(self, name)
+
+    def preload_symbols(self) -> int:
+        """Eagerly fetch every symbol descriptor.
+
+        Returns the count of cached entries.  Useful when callers
+        want to pay the IPC cost up front (one round-trip per
+        symbol) instead of amortized across the first scan-loop
+        iteration.
+        """
+        return self._client._preload_cached_symbols(self)
 
     def test_version(self) -> bool:
         """OCXcip_TestTagDbVer.  Returns True if caller should rebuild

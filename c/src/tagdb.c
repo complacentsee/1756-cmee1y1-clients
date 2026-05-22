@@ -118,7 +118,16 @@ int bp_tagdb_build(bp_tagdb_t *db, uint16_t *out_symbol_count) {
         .user         = &ctx,
     };
     int rc = bp_client_call(db->client, &spec);
-    if (rc == BP_OK && out_symbol_count) *out_symbol_count = ctx.status;
+    if (rc == BP_OK) {
+        /* Invalidate any prior cache for this path and resize for the
+         * fresh table size.  Lazy fill kicks in on the next
+         * bp_tagdb_lookup_symbol; or call bp_tagdb_preload_symbols for
+         * eager warm-up.  Best-effort: a cache-reset failure here
+         * doesn't fail the build (caller can still iterate
+         * symbol_at). */
+        (void)bp_tag_cache_reset_after_build(db->client, db->path, ctx.status);
+        if (out_symbol_count) *out_symbol_count = ctx.status;
+    }
     return rc;
 }
 

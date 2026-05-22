@@ -55,6 +55,8 @@ int bp_client_open(bp_client_t **out_client) {
     pthread_mutex_init(&c->cip_err_mu, NULL);
     /* Per-slot connection pools (v0.8.0 Phase 2) */
     pthread_mutex_init(&c->pools_mu, NULL);
+    /* Per-PLC symbol cache (v0.9.0 Phase 1) */
+    pthread_mutex_init(&c->tag_cache_mu, NULL);
 
     /* Open the shm-lock semaphore */
     c->sem_shmlock = sem_open(BP_SEM_SHMLOCK, 0);
@@ -101,6 +103,7 @@ void bp_client_close(bp_client_t *c) {
         if (c->sem_req[i])  { sem_close(c->sem_req[i]);  c->sem_req[i]  = NULL; }
         if (c->sem_resp[i]) { sem_close(c->sem_resp[i]); c->sem_resp[i] = NULL; }
     }
+    bp_tag_cache_free_all(c);
     if (c->sem_shmlock) { sem_close(c->sem_shmlock); c->sem_shmlock = NULL; }
     if (c->shm)        { munmap(c->shm, BP_SHM_TOTAL_SIZE); c->shm = NULL; }
     if (c->shm_fd >= 0) { close(c->shm_fd); c->shm_fd = -1; }
@@ -108,6 +111,7 @@ void bp_client_close(bp_client_t *c) {
     pthread_mutex_destroy(&c->txrx_mu);
     pthread_mutex_destroy(&c->cip_err_mu);
     pthread_mutex_destroy(&c->pools_mu);
+    pthread_mutex_destroy(&c->tag_cache_mu);
     free(c);
 }
 

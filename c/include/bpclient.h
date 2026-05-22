@@ -613,6 +613,40 @@ typedef struct {
 int  bp_tagdb_symbol_at(bp_tagdb_t *db, uint16_t index,
                         bp_symbol_info_t *out_info);
 
+/* bp_tagdb_lookup_symbol  (v0.9.0+)
+ *   Looks up a symbol by name and fills *out_info.  Uses a per-client
+ *   in-memory cache keyed by PLC path; multiple bp_tagdb_t handles to
+ *   the same path share the cache.
+ *
+ *   First call after bp_tagdb_build for a never-before-seen name walks
+ *   bp_tagdb_symbol_at incrementally until it finds the match (each
+ *   examined symbol is appended to the cache, so the walk's cost is
+ *   amortized across subsequent lookups).  Once the cache is hot,
+ *   lookup is an O(N) linear scan against the cached entries — fine
+ *   for the few-µs-vs-500µs-IPC tradeoff.
+ *
+ *   Returns BP_OK + populates *out_info on hit.
+ *   Returns BP_ERR_PARAM_RANGE if the name is not in the PLC's tag
+ *   table (or the table is empty — Build has not been called yet).
+ *   Returns BP_ERR_NULL_ARG / IPC-error rc on lower-level failures.
+ *
+ *   bp_tagdb_build invalidates the cache for db->path so the next
+ *   lookup re-fetches fresh descriptors. */
+int  bp_tagdb_lookup_symbol(bp_tagdb_t *db, const char *name,
+                              bp_symbol_info_t *out_info);
+
+/* bp_tagdb_preload_symbols  (v0.9.0+)
+ *   Eagerly fetches every symbol descriptor and populates the cache.
+ *   Equivalent to calling bp_tagdb_lookup_symbol for every name in
+ *   the PLC's table.  Useful when callers want to pay the cost
+ *   up-front instead of amortized across the first scan-loop
+ *   iteration.
+ *
+ *   Returns BP_OK on success (all N symbols cached), or the rc of
+ *   the first failed bp_tagdb_symbol_at.  Already-fetched entries
+ *   remain in the cache. */
+int  bp_tagdb_preload_symbols(bp_tagdb_t *db);
+
 /* Symbol-info accessors — convenience wrappers around the bit math. */
 int      bp_symbol_is_array (const bp_symbol_info_t *info);  /* 1 = array,  0 = scalar */
 int      bp_symbol_is_struct(const bp_symbol_info_t *info);  /* 1 = UDT,   0 = atomic */

@@ -120,6 +120,25 @@ struct bp_pool {
     int              ka_stop;    /* set to 1 to request keepalive thread exit */
 };
 
+/* ----- Per-PLC symbol cache (v0.9.0 Phase 1) ----- */
+/* One slot per distinct PLC path seen by this client.  Eight is
+ * generous — most callers connect to one PLC; the labelverification
+ * gateway pattern is one-process / one-PLC.  Bumping this requires
+ * recompile only (no public API change). */
+#define BP_TAG_CACHE_MAX 8
+
+struct bp_tag_cache {
+    int                in_use;
+    char               path[256];    /* keyed on this; 0-init when in_use=0 */
+    pthread_mutex_t    mu;           /* protects symbols + counts */
+    bp_symbol_info_t  *symbols;      /* dynamic; len = cap_count */
+    uint16_t           cap_count;    /* allocated capacity (= total_count after build) */
+    uint16_t           known_count;  /* number of valid entries in symbols[] */
+    uint16_t           total_count;  /* from BuildTagDb's status field */
+    /* parent client back-pointer is implicit via array offset; we don't
+     * store it because clients only ever look up by-path on themselves. */
+};
+
 /* ----- Internal Client + TagDB structs (private to the library) ----- */
 struct bp_client {
     int        shm_fd;
@@ -136,7 +155,18 @@ struct bp_client {
     bp_cip_status_t cip_err;         /* last CIP-layer rejection on this client */
     pthread_mutex_t pools_mu;        /* protects pools[] open/close lifecycle */
     struct bp_pool  pools[BP_POOL_MAX_SLOTS];
+    pthread_mutex_t   tag_cache_mu;  /* protects tag_caches[] add/remove */
+    struct bp_tag_cache tag_caches[BP_TAG_CACHE_MAX];
 };
+
+/* Internal helpers exposed across translation units. */
+struct bp_tag_cache *bp_tag_cache_find_or_alloc(bp_client_t *cl, const char *path);
+struct bp_tag_cache *bp_tag_cache_find(bp_client_t *cl, const char *path);
+void                 bp_tag_cache_invalidate(bp_client_t *cl, const char *path);
+void                 bp_tag_cache_free_all(bp_client_t *cl);
+int                  bp_tag_cache_reset_after_build(bp_client_t *cl,
+                                                     const char *path,
+                                                     uint16_t total_count);
 
 /* Internal helper exposed across translation units — records a
  * structured CIP-layer error on the client.  Used by conn.c on

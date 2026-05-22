@@ -78,6 +78,10 @@ func (db *TagDB) Close() {
 
 // Build walks the PLC's symbol table and returns the enumerated
 // symbol count. Typically ~200 ms for a few thousand symbols.
+//
+// On success, invalidates the per-PLC symbol cache for db.path and
+// resizes it for the fresh table.  Lazy fill kicks in on the next
+// LookupSymbol; or call PreloadSymbols for eager warm-up.
 func (db *TagDB) Build() (uint16, error) {
 	if db == nil {
 		return 0, ErrNullArg
@@ -90,6 +94,9 @@ func (db *TagDB) Build() (uint16, error) {
 		Read:        func(slot []byte) { n = cip.DecodeBuildTagDb(slot) },
 		TimeoutMs:   30000,
 	})
+	if err == nil {
+		db.client.resetCacheAfterBuild(db.path, n)
+	}
 	return n, translateCallErr(err)
 }
 
