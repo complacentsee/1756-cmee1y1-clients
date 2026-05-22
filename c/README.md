@@ -19,7 +19,7 @@ cmake --build build --parallel
 ```
 
 Produces:
-- `build/libbpclient.so.0.5.0` — shared library
+- `build/libbpclient.so.0.6.0` — shared library
 - `build/libbpclient.a` — static library
 - `build/tagtest` — the canonical smoke test executable
   (plus the other diagnostic binaries listed in
