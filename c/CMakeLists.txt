@@ -23,6 +23,7 @@ set(LIB_SOURCES
     src/message.c
     src/identity.c
     src/module.c
+    src/conn.c
 )
 
 # Shared library
@@ -31,7 +32,7 @@ target_link_libraries(bpclient PRIVATE pthread rt)
 set_target_properties(bpclient PROPERTIES
     PUBLIC_HEADER include/bpclient.h
     SOVERSION 0
-    VERSION 0.4.5
+    VERSION 0.5.0-wip
 )
 
 # Static library (same sources, different target)
@@ -101,6 +102,10 @@ target_link_libraries(msgprobe_routed PRIVATE bpclient pthread rt)
 add_executable(modutil examples/modutil.c)
 target_link_libraries(modutil PRIVATE bpclient pthread rt)
 
+# Example: connidentity — Identity via connected (class-3) CIP messaging
+add_executable(connidentity examples/connidentity.c)
+target_link_libraries(connidentity PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -127,5 +132,6 @@ install(TARGETS
             pathprobe
             actnodes
             modutil
+            connidentity
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

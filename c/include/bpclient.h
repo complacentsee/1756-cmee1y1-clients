@@ -213,6 +213,72 @@ int bp_client_get_display(bp_client_t *client, char out_five_chars[5]);
 int bp_client_set_display(bp_client_t *client, const char four_chars[4]);
 
 /* ============================================================
+ * Connected (class-3) CIP messaging — TxRxOpenConn/Msg/CloseConn
+ *
+ * Wraps OCXcip_TxRxOpenConn, OCXcip_TxRxMsg, OCXcip_TxRxCloseConn.
+ *
+ * STATUS (2026-05-21): the wire-format wrappers compile and dispatch
+ * cleanly, but we have NOT yet been able to coax OpenConn into
+ * returning a usable connection — the engine returns rc=0x1000 for
+ * every parameter combination we have tried.  TxRxMsg returns
+ * rc=BP_OK with resp_len=0, suggesting it silently no-ops without
+ * an established connection.  Until we crack this, prefer
+ * bp_client_get_device_id() and the tagdb path for per-slot CIP.
+ *
+ * Lifecycle (when working):
+ *   1. bp_client_txrx_open()  — Forward_Open
+ *   2. bp_client_txrx_msg()   — send/receive CIP messages
+ *   3. bp_client_txrx_close() — Forward_Close
+ *
+ * IMPORTANT: always close.  A leaked connection eats a PLC resource
+ * until the connection-inactivity timeout.
+ *
+ * Engine validation requirements (RE'd from OCXcip_TxRxOpenConn in
+ * libocxbpapi.so.2.3 @ 0x106f44):
+ *   * app_handle MUST equal 1
+ *   * encoded_path non-NULL
+ *   * path_size > 0
+ * ============================================================ */
+
+/* Connection spec — caller-managed, passed to every TxRx call.
+ * The same fields go to OpenConn, TxRxMsg, CloseConn unchanged
+ * (the OEM API duplicates them across calls — we follow suit). */
+typedef struct {
+    uint16_t       app_handle;     /* caller-assigned ID; reuse the same value across the lifecycle */
+    uint32_t       options;        /* vendor flags, normally 0 */
+    const uint8_t *encoded_path;   /* route to target — e.g. {0x01, 0x02} for backplane slot 2 */
+    uint16_t       path_size;      /* byte count of encoded_path (< 256) */
+    uint16_t       conn_params;    /* vendor conn params; normally 0 (engine uses defaults) */
+} bp_conn_spec_t;
+
+/* bp_client_txrx_open
+ *   Establishes a class-3 connection to the device addressed by
+ *   spec->encoded_path.  Returns the engine-assigned connection_id
+ *   and connection_serial; caller stores them or just discards (we
+ *   key by spec->app_handle for the duration of the connection). */
+int bp_client_txrx_open(bp_client_t *client, const bp_conn_spec_t *spec,
+                         uint16_t *out_conn_id, uint16_t *out_conn_serial);
+
+/* bp_client_txrx_msg
+ *   Sends one CIP request over the connection set up by txrx_open.
+ *   req points to the CIP request bytes you'd put on the wire:
+ *       [service_code, path_size_words, EPATH..., body...]
+ *   The response in resp[] is the raw CIP reply:
+ *       [service_reply, reserved, general_status, ext_status_size, ext_status..., body...]
+ *   *out_resp_size is set to the actual byte count on success;
+ *   pass an initial value of resp_capacity (the caller's buffer size). */
+int bp_client_txrx_msg(bp_client_t *client, const bp_conn_spec_t *spec,
+                        const void *req, uint16_t req_size,
+                        void *resp, uint16_t resp_capacity,
+                        uint16_t *out_resp_size);
+
+/* bp_client_txrx_close
+ *   Releases the connection (Forward_Close internally).  Idempotent
+ *   per spec->app_handle — calling twice for the same handle is
+ *   safe but the second call typically returns an engine error. */
+int bp_client_txrx_close(bp_client_t *client, const bp_conn_spec_t *spec);
+
+/* ============================================================
  * Tag database
  * ============================================================ */
 
