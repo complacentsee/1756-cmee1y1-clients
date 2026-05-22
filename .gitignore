@@ -1,0 +1,44 @@
+# Build artifacts
+build/
+out/
+*.o
+*.so
+*.so.*
+*.a
+*.dylib
+
+# C/C++
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.bak
+
+# Go
+go/cmd/tagtest/tagtest
+go/cmd/*/[a-zA-Z]*
+!go/cmd/*/main.go
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+dist/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Validation runtime outputs
+validation/out/
+validation/*.log
+
+# Local-only
+.env
+*.local

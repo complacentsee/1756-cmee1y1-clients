@@ -1,0 +1,25 @@
+# Example compose file for the C tagtest container.
+#
+# Run on the HMI:
+#   docker --host=tcp://10.0.0.166:2375 compose -f docker-compose.yml up
+#
+# All three of --ipc=host, --pid=host, /dev/shm bind are MANDATORY.
+# See ../docs/container-plumbing.md for the explanation.
+
+services:
+  tagtest:
+    build: .
+    image: bpclient-c-tagtest:local
+    ipc: host
+    pid: host
+    volumes:
+      - /dev/shm:/dev/shm
+    platform: linux/arm64
+    environment:
+      BP_PATH: "P:1,S:2"          # CIP route to your PLC
+      BP_TAG: "OCX_TEST"          # safe test tag (DINT controller-scope)
+    command:
+      - --path
+      - "${BP_PATH:-P:1,S:2}"
+      - --tag
+      - "${BP_TAG:-OCX_TEST}"
