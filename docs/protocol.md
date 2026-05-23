@@ -301,11 +301,35 @@ Wire format from Ghidra: `OCXcip_GetWCTime @ 0x10e2e0`,
 consumed (Set) or returned (Get).
 
 The four SDK helpers expose this as a raw 6-qword struct
-(`bp_wctime_t` / `ocxbp.WCTime` / `bpclient.WCTime`) — `sec` is
-Unix epoch seconds (UTC for the `*_utc` variants); `aux0..aux3`
-carry TZ/DST/leap-second metadata in a bit layout that we haven't
-fully characterized.  Typed `time.Time` / `datetime` conversion is
-deferred until we've validated those bits against Studio 5000.
+(`bp_wctime_t` / `ocxbp.WCTime` / `bpclient.WCTime`).  Field
+semantics validated empirically against the cm1756 (v0.10.2,
+2026-05-22):
+
+- **`sec`** is microseconds since a per-PLC epoch (NOT Unix seconds
+  as the OEM header annotation claimed).  Observed map:
+
+  | PLC | `GetWCTime`               | `GetWCTimeUTC`                 |
+  |-----|---------------------------|--------------------------------|
+  | L73 | µs since 2000-01-01 UTC   | µs since 1998-01-01 UTC        |
+  | L85 | µs since 1972-01-01 UTC (ODVA std) | µs since 1970-01-01 UTC (Unix) |
+
+  Pattern: the UTC variant subtracts 2 years from the LOCAL
+  variant's epoch (i.e. returns a larger µs value).  Reason
+  unclear; consistent across the two devices.  v0.10.2+ ships an
+  enum (`bp_wctime_epoch_t` / `ocxbp.WCTimeEpoch` /
+  `bpclient.WCTIME_EPOCH_*`) + a `to_unix_us(epoch)` helper that
+  does the conversion when the caller knows their device's epoch.
+
+- **`nsec`** is always 0 in observed responses.
+
+- **`aux0..aux3`** carry one of two payloads:
+  - **TZ-name ASCII** (observed on the L85's `GetWCTimeUTC`):
+    32 little-endian bytes spelling e.g.
+    `"0 Pacific Time (US & Canada)"`.  Extracted with
+    `bp_wctime_tz_name` / `WCTime.TZName` / `WCTime.tz_name`.
+  - **Opaque structured bits** (other variants): non-ASCII
+    metadata in an as-yet-unidentified layout (probably TZ offset
+    + DST flags + leap-second info).
 
 ### Extended device info / IP config (v0.10.0+)
 

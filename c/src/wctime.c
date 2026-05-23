@@ -137,3 +137,41 @@ int bp_client_set_wctime_utc(bp_client_t *cl, const char *path,
                               uint16_t instance, const bp_wctime_t *in) {
     return wc_set_dispatch(cl, "OCXcip_SetWCTimeUTC", path, instance, in);
 }
+
+/* ────────── decoders (v0.10.2+) ─────────────────────────────── */
+
+/* Unix epoch seconds for each per-device epoch.  Verified by hand
+ * (e.g. 2000-01-01 UTC = 946684800 unix). */
+static int64_t epoch_unix_seconds(bp_wctime_epoch_t e) {
+    switch (e) {
+    case BP_WCTIME_EPOCH_UNIX: return 0;
+    case BP_WCTIME_EPOCH_1972: return  63072000LL;   /* 2 years past Unix */
+    case BP_WCTIME_EPOCH_1998: return 883612800LL;
+    case BP_WCTIME_EPOCH_2000: return 946684800LL;
+    }
+    return 0;
+}
+
+int64_t bp_wctime_to_unix_us(const bp_wctime_t *wc, bp_wctime_epoch_t epoch) {
+    if (!wc) return 0;
+    return (int64_t)wc->sec + epoch_unix_seconds(epoch) * 1000000LL;
+}
+
+size_t bp_wctime_tz_name(const bp_wctime_t *wc, char *out, size_t out_size) {
+    if (!wc || !out || out_size == 0) return 0;
+    /* Read 32 bytes from aux0..aux3 in little-endian byte order
+     * (i.e. memcpy from the qwords as they appear in memory on a
+     * LE platform — both AArch64 and x86 qualify).  Stop at the
+     * first NUL byte or buffer limit. */
+    uint64_t qwords[4] = { wc->aux0, wc->aux1, wc->aux2, wc->aux3 };
+    const uint8_t *bytes = (const uint8_t *)qwords;
+    size_t n = 0;
+    size_t max_copy = out_size - 1;
+    if (max_copy > 32) max_copy = 32;
+    for (; n < max_copy; n++) {
+        if (bytes[n] == 0) break;
+        out[n] = (char)bytes[n];
+    }
+    out[n] = '\0';
+    return n;
+}

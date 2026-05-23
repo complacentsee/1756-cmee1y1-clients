@@ -6,20 +6,36 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp"
 )
 
-func printWC(label, path string, wc ocxbp.WCTime, err error) bool {
+func epochFor(slot int, isUTC bool) ocxbp.WCTimeEpoch {
+	if slot == 2 {
+		if isUTC {
+			return ocxbp.WCTimeEpochUnix
+		}
+		return ocxbp.WCTimeEpoch1972
+	}
+	if isUTC {
+		return ocxbp.WCTimeEpoch1998
+	}
+	return ocxbp.WCTimeEpoch2000
+}
+
+func printWC(label, path string, wc ocxbp.WCTime, err error,
+	epoch ocxbp.WCTimeEpoch, tryTZ bool) bool {
 	if err != nil {
 		fmt.Printf("[wctime] %s %s: rc=%d\n", label, path, ocxbp.ErrCode(err))
 		return false
 	}
-	t := time.Unix(int64(wc.Sec), int64(wc.Nsec)).UTC()
-	fmt.Printf("[wctime] %s %s: sec=%d nsec=%d -> %s aux=(0x%x,0x%x,0x%x,0x%x)\n",
-		label, path, wc.Sec, wc.Nsec, t.Format("2006-01-02T15:04:05"),
-		wc.Aux0, wc.Aux1, wc.Aux2, wc.Aux3)
+	t := wc.ToTime(epoch)
+	tz := ""
+	if tryTZ {
+		tz = wc.TZName()
+	}
+	fmt.Printf("[wctime] %s %s: %s UTC  tz=%q\n",
+		label, path, t.Format("2006-01-02T15:04:05"), tz)
 	return true
 }
 
@@ -37,8 +53,8 @@ func main() {
 		path := fmt.Sprintf("P:1,S:%d", s)
 		local, errL := c.GetWCTime(path, 1)
 		utc, errU := c.GetWCTimeUTC(path, 1)
-		anyOK = printWC("LOCAL", path, local, errL) || anyOK
-		anyOK = printWC("UTC  ", path, utc, errU) || anyOK
+		anyOK = printWC("LOCAL", path, local, errL, epochFor(s, false), false) || anyOK
+		anyOK = printWC("UTC  ", path, utc, errU, epochFor(s, true), true) || anyOK
 	}
 	if anyOK {
 		fmt.Println("[wctime] PASS")

@@ -340,22 +340,60 @@ int bp_client_get_device_id_status(bp_client_t *client,
 /* ============================================================
  * Wall-clock get/set (v0.10.0+)
  *
- * Raw 6-qword wire format — sec / nsec / aux0..3.  The aux fields
- * carry timezone / DST / leap-second metadata; we don't yet have a
- * confirmed bit layout for them, so the SDK exposes them as opaque
- * uint64s.  Callers building a typed `time.Time` / `datetime` value
- * use `.sec` (and `.nsec` if sub-second precision matters); the
- * UTC variants don't need aux interpretation for absolute time.
+ * Raw 6-qword wire format — sec / nsec / aux0..3.  Field semantics
+ * are NOT what the OEM header suggested ("Unix seconds") — they're
+ * device-dependent.  Decode helpers live below the struct.
  * ============================================================ */
 
 typedef struct {
-    uint64_t sec;     /* Unix epoch seconds (UTC for *UTC variants) */
-    uint64_t nsec;    /* nanoseconds within the second */
-    uint64_t aux0;    /* TZ / DST / leap-second metadata — opaque */
+    uint64_t sec;     /* microseconds since the per-PLC epoch (NOT
+                       * Unix seconds — the OEM header annotation was
+                       * a guess; see bp_wctime_epoch_t below) */
+    uint64_t nsec;    /* unused in observed responses (always 0) */
+    uint64_t aux0;    /* opaque OR TZ-name ASCII bytes (see
+                       * bp_wctime_tz_name); contents depend on
+                       * device + variant */
     uint64_t aux1;
     uint64_t aux2;
     uint64_t aux3;
 } bp_wctime_t;
+
+/* Per-device epoch for bp_wctime_t.sec.  Observed empirically against
+ * the cm1756 (2026-05-22):
+ *   L85 (slot 2):  GetWCTime    → BP_WCTIME_EPOCH_1972
+ *                  GetWCTimeUTC → BP_WCTIME_EPOCH_UNIX
+ *   L73 (slot 1):  GetWCTime    → BP_WCTIME_EPOCH_2000
+ *                  GetWCTimeUTC → BP_WCTIME_EPOCH_1998
+ * Pattern: the UTC variant subtracts 2 years from the LOCAL variant's
+ * epoch (i.e. returns a larger µs value).  Reason unclear; consistent
+ * across the two devices.  Other PLCs may use different epochs —
+ * callers should validate against a known-correct timestamp before
+ * relying on any specific epoch. */
+typedef enum {
+    BP_WCTIME_EPOCH_UNIX = 0,  /* 1970-01-01 UTC (L85 GetWCTimeUTC) */
+    BP_WCTIME_EPOCH_1972,      /* 1972-01-01 UTC (L85 GetWCTime; ODVA Wall Clock std) */
+    BP_WCTIME_EPOCH_1998,      /* 1998-01-01 UTC (L73 GetWCTimeUTC) */
+    BP_WCTIME_EPOCH_2000,      /* 2000-01-01 UTC (L73 GetWCTime) */
+} bp_wctime_epoch_t;
+
+/* bp_wctime_to_unix_us
+ *   Converts a bp_wctime_t to Unix-epoch microseconds, given the
+ *   per-device epoch interpretation.  Returned value is int64_t and
+ *   can be negative for pre-1970 timestamps. */
+int64_t bp_wctime_to_unix_us(const bp_wctime_t *wc, bp_wctime_epoch_t epoch);
+
+/* bp_wctime_tz_name
+ *   Extracts a NUL-terminated ASCII timezone-name string from the
+ *   aux0..aux3 qwords (32 bytes total in little-endian order).
+ *   Writes up to out_size-1 bytes into out and NUL-terminates;
+ *   returns the byte count written (excluding NUL).
+ *
+ *   Only meaningful when aux0..3 actually contain a TZ string —
+ *   observed on the L85's GetWCTimeUTC response (e.g.
+ *   "0 Pacific Time (US & Canada)").  On other devices / variants
+ *   aux0..3 contain different structured data and this function
+ *   will return garbage. */
+size_t bp_wctime_tz_name(const bp_wctime_t *wc, char *out, size_t out_size);
 
 /* bp_client_get_wctime / get_wctime_utc
  *   Reads the wall-clock object on the device addressed by text_path.

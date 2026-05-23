@@ -1108,15 +1108,70 @@ class Client:
 @dataclass
 class WCTime:
     """Raw 6-qword wall-clock struct (v0.10.0+).  Mirrors C
-    bp_wctime_t / Go ocxbp.WCTime.  ``sec`` is Unix epoch seconds
-    (UTC for the *_utc variants); ``aux0..aux3`` carry TZ/DST/leap
-    metadata in an as-yet-uncharacterized bit layout."""
+    bp_wctime_t / Go ocxbp.WCTime.
+
+    ``sec`` is microseconds since a per-PLC epoch (the OEM header's
+    "Unix seconds" annotation was wrong).  Use ``to_unix_us(epoch)``
+    or ``to_datetime(epoch)`` with the appropriate
+    ``WCTIME_EPOCH_*`` constant; see WCTIME_EPOCH_UNIX docstring for
+    the empirical per-device map.
+
+    ``aux0..aux3`` contain either opaque structured data or a NUL-
+    terminated ASCII TZ name (e.g. ``"0 Pacific Time (US & Canada)"``
+    on the L85's GetWCTimeUTC).  Use ``tz_name()`` to extract.
+    """
     sec: int = 0
     nsec: int = 0
     aux0: int = 0
     aux1: int = 0
     aux2: int = 0
     aux3: int = 0
+
+    def to_unix_us(self, epoch: int) -> int:
+        """Convert to Unix-epoch microseconds (int64) given the
+        per-PLC epoch identifier (WCTIME_EPOCH_*)."""
+        return self.sec + _epoch_unix_seconds(epoch) * 1_000_000
+
+    def to_datetime(self, epoch: int):
+        """Convert to a UTC datetime.datetime given the per-PLC
+        epoch."""
+        import datetime
+        us = self.to_unix_us(epoch)
+        return datetime.datetime.fromtimestamp(us / 1_000_000,
+                                                tz=datetime.timezone.utc)
+
+    def tz_name(self) -> str:
+        """Extract the NUL-terminated ASCII TZ-name string from
+        aux0..aux3 (32 bytes, little-endian).  Only meaningful when
+        those qwords actually carry a TZ string."""
+        import struct
+        buf = struct.pack("<4Q", self.aux0, self.aux1, self.aux2, self.aux3)
+        n = buf.find(b"\x00")
+        if n < 0:
+            n = len(buf)
+        return buf[:n].decode("ascii", "replace")
+
+
+# Per-PLC epoch identifiers for WCTime.sec interpretation.  Empirical
+# map (validated 2026-05-22):
+#   L85 (slot 2):  GetWCTime    → WCTIME_EPOCH_1972
+#                  GetWCTimeUTC → WCTIME_EPOCH_UNIX
+#   L73 (slot 1):  GetWCTime    → WCTIME_EPOCH_2000
+#                  GetWCTimeUTC → WCTIME_EPOCH_1998
+# Pattern: the UTC variant subtracts 2 years from the LOCAL epoch.
+WCTIME_EPOCH_UNIX = 0   # 1970-01-01 UTC (L85 GetWCTimeUTC)
+WCTIME_EPOCH_1972 = 1   # 1972-01-01 UTC (L85 GetWCTime; ODVA standard)
+WCTIME_EPOCH_1998 = 2   # 1998-01-01 UTC (L73 GetWCTimeUTC)
+WCTIME_EPOCH_2000 = 3   # 2000-01-01 UTC (L73 GetWCTime)
+
+
+def _epoch_unix_seconds(epoch: int) -> int:
+    return {
+        WCTIME_EPOCH_UNIX: 0,
+        WCTIME_EPOCH_1972: 63_072_000,
+        WCTIME_EPOCH_1998: 883_612_800,
+        WCTIME_EPOCH_2000: 946_684_800,
+    }.get(epoch, 0)
 
 
 @dataclass

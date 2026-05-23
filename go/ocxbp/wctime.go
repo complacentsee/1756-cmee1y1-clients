@@ -4,6 +4,7 @@ package ocxbp
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/cip"
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/shm"
@@ -111,4 +112,57 @@ func (c *Client) SetWCTime(textPath string, instance uint16, in WCTime) error {
 // SetWCTimeUTC writes the UTC wall clock on the device.
 func (c *Client) SetWCTimeUTC(textPath string, instance uint16, in WCTime) error {
 	return c.wctimeSet(cip.FnSetWCTimeUTC, textPath, instance, in)
+}
+
+// WCTimeEpoch identifies the per-device epoch interpretation for
+// WCTime.Sec.  See bp_wctime_epoch_t in the C SDK for the
+// empirical L73/L85 observations.
+type WCTimeEpoch int
+
+const (
+	WCTimeEpochUnix WCTimeEpoch = iota // 1970-01-01 UTC (L85 GetWCTimeUTC)
+	WCTimeEpoch1972                    // 1972-01-01 UTC (L85 GetWCTime; ODVA standard)
+	WCTimeEpoch1998                    // 1998-01-01 UTC (L73 GetWCTimeUTC)
+	WCTimeEpoch2000                    // 2000-01-01 UTC (L73 GetWCTime)
+)
+
+func epochUnixSeconds(e WCTimeEpoch) int64 {
+	switch e {
+	case WCTimeEpoch1972:
+		return 63072000
+	case WCTimeEpoch1998:
+		return 883612800
+	case WCTimeEpoch2000:
+		return 946684800
+	}
+	return 0
+}
+
+// ToUnixMicros converts the WCTime's Sec field to Unix-epoch
+// microseconds, given the per-device epoch.
+func (wc WCTime) ToUnixMicros(epoch WCTimeEpoch) int64 {
+	return int64(wc.Sec) + epochUnixSeconds(epoch)*1_000_000
+}
+
+// ToTime converts the WCTime to a Go time.Time in UTC.
+func (wc WCTime) ToTime(epoch WCTimeEpoch) time.Time {
+	us := wc.ToUnixMicros(epoch)
+	return time.Unix(us/1_000_000, (us%1_000_000)*1_000).UTC()
+}
+
+// TZName extracts the NUL-terminated ASCII timezone-name string
+// from the four aux qwords (32 bytes, little-endian).  Only
+// meaningful when aux0..3 actually carry a TZ string (observed
+// on the L85's GetWCTimeUTC response).
+func (wc WCTime) TZName() string {
+	var buf [32]byte
+	binary.LittleEndian.PutUint64(buf[0:], wc.Aux0)
+	binary.LittleEndian.PutUint64(buf[8:], wc.Aux1)
+	binary.LittleEndian.PutUint64(buf[16:], wc.Aux2)
+	binary.LittleEndian.PutUint64(buf[24:], wc.Aux3)
+	n := 0
+	for n < len(buf) && buf[n] != 0 {
+		n++
+	}
+	return string(buf[:n])
 }

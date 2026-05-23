@@ -16,9 +16,9 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.10.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.10.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.10.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.10.2) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.10.2) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.10.2) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
@@ -57,8 +57,14 @@ all wire-format-anchored against Ghidra decompiles of
   Wipes pools / tagdbs / symbol caches; callers re-`open_session`
   and re-open from scratch.
 - **`OCXcip_GetWCTime` / `SetWCTime` + UTC variants** — read/write
-  the wall-clock object on a remote device.  Raw 6-qword struct;
-  `time.Time` / `datetime` conversion deferred.
+  the wall-clock object on a remote device.  v0.10.2 ships typed
+  decoders: `bp_wctime_to_unix_us(wc, epoch)` /
+  `WCTime.ToTime(epoch)` / `WCTime.to_datetime(epoch)` convert the
+  µs-since-per-PLC-epoch into a real timestamp; `WCTime.TZName()` /
+  `bp_wctime_tz_name()` extracts the ASCII TZ-name string from the
+  `aux0..3` qwords (e.g. `"Pacific Time (US & Canada)"` on the
+  L85's UTC variant).  Per-PLC epoch map in
+  [`docs/protocol.md`](docs/protocol.md).
 - **`OCXcip_GetExDevObject` / `GetDeviceICPObject`** — raw-bytes
   accessors for extended device info + EtherNet/IP IP-config.
 
