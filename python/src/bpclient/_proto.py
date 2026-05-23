@@ -48,6 +48,33 @@ REQ_HAS_EXTRA_OFF = 0x108
 REQ_DATA_PTR_OFF = 0x110
 REQ_RESULT_OFF = 0x118
 
+# AccessTagDataDb layout (v0.10.4+ peer of AccessTagData; routes via
+# the cached db_handle instead of the path string).  See
+# docs/access-tag-data-db.md for the wire-format trace and
+# docs/protocol.md for the canonical spec.  Descriptor stride is
+# 0x128 vs 0x120 — fields are reorganized AND widened, not just
+# shifted +8.
+TAGDATA_DB_HANDLE_OFF = 0x78       # uint32 db_handle
+TAGDATA_DB_HAS_EXTRA_OFF = 0x7C    # uint8  has_extra (we ship 0)
+TAGDATA_DB_OPT_VALUE_OFF = 0x7E    # uint16 opt_value (we ship 0)
+TAGDATA_DB_COUNT_OFF = 0x80        # uint16 request count
+TAGDATA_DB_REQ0_START = 0x88       # first descriptor
+TAGDATA_DB_REQ_STRIDE = 0x128      # bytes per descriptor
+TAGDATA_DB_DATA_AREA0 = 0x1B0      # data area start when count == 1
+
+# Within an AccessTagDataDb request descriptor (relative to descriptor
+# start).  Diff vs AccessTagData: action moves to +0x100, the small
+# ints widen to u32, has_data sits at +0x110 (u8), mask_seed at +0x118
+# (u64), result moves to +0x120.
+REQ_DB_TAGNAME_OFF = 0x000
+REQ_DB_ACTION_OFF = 0x100          # uint16 1=read 2=write
+REQ_DB_DATATYPE_OFF = 0x104        # uint32 (widened from u16)
+REQ_DB_ELEM_BYTE_SIZE_OFF = 0x108  # uint32 (widened from u16)
+REQ_DB_ELEM_COUNT_OFF = 0x10C      # uint32 (widened from u16)
+REQ_DB_HAS_DATA_OFF = 0x110        # uint8 (we ship 0)
+REQ_DB_MASK_SEED_OFF = 0x118       # uint64 (we ship 0)
+REQ_DB_RESULT_OFF = 0x120          # uint32 server-written
+
 # MessageSend layout
 MSGSEND_REQ_OFF = 0x00078
 MSGSEND_REQ_SIZE_OFF = 0x19078

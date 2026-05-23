@@ -49,6 +49,12 @@ const (
 	// SizeAccessTagData is computed per-call:
 	//   0x2A0 + (count-1)*0x120 + total_data_bytes
 
+	FnAccessTagDataDb = "OCXcip_AccessTagDataDb"
+	// SizeAccessTagDataDb is computed per-call:
+	//   0x1B0 + (count-1)*0x128 + total_data_bytes
+	// (v0.10.4+ peer of AccessTagData using cached db_handle —
+	// saves the per-call path-string marshalling.)
+
 	FnGetIdObject        = "OCXcip_GetIdObject"
 	SizeGetIdObject uint32 = 0xA8
 

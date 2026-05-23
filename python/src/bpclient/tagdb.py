@@ -418,6 +418,82 @@ class TagDB:
                               fill=fill, read=read, timeout_ms=10000)
 
     # ============================================================
+    # AccessTagDataDb (v0.10.4+)
+    # ============================================================
+    def access_db(self, reqs: list[TagRequest]) -> None:
+        """OCXcip_AccessTagDataDb: same shape as ``access`` but routes
+        through the cached db_handle from ``open_tagdb`` instead of
+        re-sending the path string per call.  Eliminates ~251 bytes of
+        per-call marshalling and the engine-side path parse; per-tag
+        CIP General Status semantics are unchanged.
+
+        Wire-format trace in docs/access-tag-data-db.md; canonical
+        spec in docs/protocol.md "OCXcip_AccessTagDataDb".  Each
+        request's ``.result`` is set on return; slot-level errorcode
+        raises BpEngine.
+
+        SDK policy: ``has_extra = 0``, ``has_data = 0``,
+        ``mask_seed = 0`` — mirrors the OEM wrapper's NULL-pointer
+        branches, which route the engine through the same data-area-
+        inline path AccessTagData already exercises.
+        """
+        if not reqs:
+            raise BpNullArg("reqs is empty")
+        if len(reqs) > 16:
+            raise BpParamRange("max 16 requests per call")
+
+        data_area_start = (P.TAGDATA_DB_DATA_AREA0
+                           + (len(reqs) - 1) * P.TAGDATA_DB_REQ_STRIDE)
+        total_data_bytes = sum(r.elem_byte_size * r.elem_count for r in reqs)
+        payload_size = data_area_start + total_data_bytes
+        if payload_size > P.SLOT_STRIDE - 0x80:
+            raise BpSlotTooLarge(f"payload {payload_size} exceeds slot capacity")
+
+        handle = self._handle
+
+        def fill(slot):
+            # db_handle at +0x78; has_extra/opt_value already 0 from
+            # the dispatcher's bulk-clear.
+            struct.pack_into("<I", slot, P.TAGDATA_DB_HANDLE_OFF, handle)
+            struct.pack_into("<H", slot, P.TAGDATA_DB_COUNT_OFF, len(reqs))
+
+            data_off = data_area_start
+            for i, r in enumerate(reqs):
+                req_start = P.TAGDATA_DB_REQ0_START + i * P.TAGDATA_DB_REQ_STRIDE
+                # descriptor is already zero'd
+                tn = r.tag_name.encode("ascii", "strict")[:254]
+                slot[req_start:req_start + len(tn)] = tn
+                # action @ +0x100 u16; data_type / elem_byte_size /
+                # elem_count are u32 (widened from u16 in
+                # AccessTagData).
+                struct.pack_into("<H", slot, req_start + P.REQ_DB_ACTION_OFF,
+                                 r.action)
+                struct.pack_into("<III", slot, req_start + P.REQ_DB_DATATYPE_OFF,
+                                 r.data_type, r.elem_byte_size, r.elem_count)
+                # has_data and mask_seed stay 0 from the bulk-clear.
+
+                nbytes = r.elem_byte_size * r.elem_count
+                if r.action == P.ACTION_WRITE and nbytes > 0 and len(r.data) > 0:
+                    n = min(nbytes, len(r.data))
+                    slot[data_off:data_off + n] = r.data[:n]
+                data_off += nbytes
+
+        def read(slot):
+            data_off = data_area_start
+            for i, r in enumerate(reqs):
+                req_start = P.TAGDATA_DB_REQ0_START + i * P.TAGDATA_DB_REQ_STRIDE
+                # result is at +0x120 (not +0x118 as for AccessTagData)
+                r.result = struct.unpack_from("<I", slot,
+                                              req_start + P.REQ_DB_RESULT_OFF)[0]
+                nbytes = r.elem_byte_size * r.elem_count
+                if r.action == P.ACTION_READ and nbytes > 0:
+                    r.data = bytes(slot[data_off:data_off + nbytes])
+                data_off += nbytes
+
+        self._client.raw.call("OCXcip_AccessTagDataDb", payload_size,
+                              fill=fill, read=read, timeout_ms=10000)
+
+    # ============================================================
     # Scalar helpers
     # ============================================================
     def _scalar_rw(self, tag: str, data_type: int, byte_size: int,
