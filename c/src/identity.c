@@ -158,6 +158,98 @@ int bp_client_get_device_id_status(bp_client_t *cl, const char *path,
 }
 
 /* ============================================================
+ * GetExDevObject — extended device info (v0.10.0+)
+ *
+ * Wire format (Ghidra: 0x001087e4):
+ *   payload_size = 0x260
+ *   request: path at +0x78, instance at +0x25A (uint16)
+ *   response: 28 qwords + uint16 trailer at +0x178..+0x25A (226 bytes)
+ * ============================================================ */
+typedef struct {
+    const char *path;
+    uint16_t    instance;
+    uint8_t    *out;       /* 226 bytes */
+} exd_ctx_t;
+
+static void exd_fill(uint8_t *slot, void *user) {
+    exd_ctx_t *c = user;
+    size_t n = strlen(c->path);
+    if (n > 254) n = 254;
+    memcpy(slot + 0x78, c->path, n);
+    *(slot + 0x78 + n) = 0;
+    bp_st_u16(slot + 0x25A, c->instance);
+}
+
+static void exd_read(uint8_t *slot, void *user) {
+    exd_ctx_t *c = user;
+    memcpy(c->out, slot + 0x178, BP_EX_DEV_OBJECT_BYTES);
+}
+
+int bp_client_get_ex_dev_object(bp_client_t *cl, const char *path,
+                                 uint16_t instance,
+                                 uint8_t out[BP_EX_DEV_OBJECT_BYTES]) {
+    if (!cl || !path || !out) return BP_ERR_NULL_ARG;
+    if (strlen(path) > 254)   return BP_ERR_PARAM_RANGE;
+    memset(out, 0, BP_EX_DEV_OBJECT_BYTES);
+    exd_ctx_t ctx = { .path = path, .instance = instance, .out = out };
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_GetExDevObject",
+        .payload_size = 0x260,
+        .fill_payload = exd_fill,
+        .read_reply   = exd_read,
+        .timeout_ms   = 5000,
+        .user         = &ctx,
+    };
+    return bp_client_call(cl, &spec);
+}
+
+/* ============================================================
+ * GetDeviceICPObject — EtherNet/IP IP-config (v0.10.0+)
+ *
+ * Wire format (Ghidra: 0x00108d00):
+ *   payload_size = 0x190
+ *   request: path at +0x78, instance at +0x18C (uint16)
+ *   response: 2 qwords + 1 uint32 at +0x178..+0x18C (20 bytes)
+ * ============================================================ */
+typedef struct {
+    const char *path;
+    uint16_t    instance;
+    uint8_t    *out;       /* 20 bytes */
+} icp_ctx_t;
+
+static void icp_fill(uint8_t *slot, void *user) {
+    icp_ctx_t *c = user;
+    size_t n = strlen(c->path);
+    if (n > 254) n = 254;
+    memcpy(slot + 0x78, c->path, n);
+    *(slot + 0x78 + n) = 0;
+    bp_st_u16(slot + 0x18C, c->instance);
+}
+
+static void icp_read(uint8_t *slot, void *user) {
+    icp_ctx_t *c = user;
+    memcpy(c->out, slot + 0x178, BP_DEVICE_ICP_OBJECT_BYTES);
+}
+
+int bp_client_get_device_icp_object(bp_client_t *cl, const char *path,
+                                     uint16_t instance,
+                                     uint8_t out[BP_DEVICE_ICP_OBJECT_BYTES]) {
+    if (!cl || !path || !out) return BP_ERR_NULL_ARG;
+    if (strlen(path) > 254)   return BP_ERR_PARAM_RANGE;
+    memset(out, 0, BP_DEVICE_ICP_OBJECT_BYTES);
+    icp_ctx_t ctx = { .path = path, .instance = instance, .out = out };
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_GetDeviceICPObject",
+        .payload_size = 0x190,
+        .fill_payload = icp_fill,
+        .read_reply   = icp_read,
+        .timeout_ms   = 5000,
+        .user         = &ctx,
+    };
+    return bp_client_call(cl, &spec);
+}
+
+/* ============================================================
  * GetActiveNodeTable
  * ============================================================ */
 typedef struct { uint32_t lo, hi; } an_ctx_t;

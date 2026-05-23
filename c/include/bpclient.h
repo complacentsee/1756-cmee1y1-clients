@@ -202,6 +202,21 @@ int  bp_client_open_session(bp_client_t *client, uint32_t *out_handle);
  *   across multiple sessions on the same process. */
 int  bp_client_close_session(bp_client_t *client);
 
+/* bp_client_reconnect  (v0.10.0+)
+ *   Re-establishes the IPC handle after a bpServer restart.  Mirrors
+ *   the OEM `ReconnectClient` at libocxbpapi-w.so:0x107e00 — closes
+ *   the existing IPC, sleeps 50 ms, then reopens shm + semaphores.
+ *
+ *   INVALIDATES EVERYTHING the caller held: open pools, tag databases,
+ *   and symbol caches are all torn down before the IPC restart.
+ *   After Reconnect succeeds, callers must call bp_client_open_session
+ *   again and re-open any pools / tag databases from scratch.
+ *
+ *   Returns BP_OK on successful reconnect, BP_ERR_CLIENT_OPEN if any
+ *   sem_open / shm_open / mmap failed (typically because bpServer
+ *   isn't running yet). */
+int bp_client_reconnect(bp_client_t *client);
+
 /* ============================================================
  * Unconnected (UCMM) CIP messaging — bp_client_message_send
  *
@@ -321,6 +336,73 @@ int bp_client_get_device_id_status(bp_client_t *client,
                                     const char *text_path,
                                     uint16_t instance,
                                     uint16_t *out_status);
+
+/* ============================================================
+ * Wall-clock get/set (v0.10.0+)
+ *
+ * Raw 6-qword wire format — sec / nsec / aux0..3.  The aux fields
+ * carry timezone / DST / leap-second metadata; we don't yet have a
+ * confirmed bit layout for them, so the SDK exposes them as opaque
+ * uint64s.  Callers building a typed `time.Time` / `datetime` value
+ * use `.sec` (and `.nsec` if sub-second precision matters); the
+ * UTC variants don't need aux interpretation for absolute time.
+ * ============================================================ */
+
+typedef struct {
+    uint64_t sec;     /* Unix epoch seconds (UTC for *UTC variants) */
+    uint64_t nsec;    /* nanoseconds within the second */
+    uint64_t aux0;    /* TZ / DST / leap-second metadata — opaque */
+    uint64_t aux1;
+    uint64_t aux2;
+    uint64_t aux3;
+} bp_wctime_t;
+
+/* bp_client_get_wctime / get_wctime_utc
+ *   Reads the wall-clock object on the device addressed by text_path.
+ *   The *_utc variant returns UTC-relative time (independent of the
+ *   device's TZ config); the non-UTC variant returns local time. */
+int bp_client_get_wctime    (bp_client_t *client, const char *text_path,
+                              uint16_t instance, bp_wctime_t *out);
+int bp_client_get_wctime_utc(bp_client_t *client, const char *text_path,
+                              uint16_t instance, bp_wctime_t *out);
+
+/* bp_client_set_wctime / set_wctime_utc
+ *   Writes the wall-clock object.  Pass NULL for `in` to clear the
+ *   "have buffer" flag (mirrors the OEM signature, where a NULL
+ *   pointer means "use the default" — the server's interpretation
+ *   varies, so callers should always pass a populated struct). */
+int bp_client_set_wctime    (bp_client_t *client, const char *text_path,
+                              uint16_t instance, const bp_wctime_t *in);
+int bp_client_set_wctime_utc(bp_client_t *client, const char *text_path,
+                              uint16_t instance, const bp_wctime_t *in);
+
+/* ============================================================
+ * Extended device info + EtherNet/IP IP-config (v0.10.0+)
+ *
+ * Raw-bytes API — both opcodes return structured data but we ship
+ * the binary representation directly until a real consumer needs
+ * specific fields decoded.
+ * ============================================================ */
+
+/* bp_client_get_ex_dev_object
+ *   OCXcip_GetExDevObject: 226-byte extended device info for the
+ *   device named by `text_path` (vendor-specific Identity-style
+ *   layout — 28 qwords + uint16 trailer).
+ *   `out` must be at least 226 bytes; the SDK writes the raw engine
+ *   response. */
+#define BP_EX_DEV_OBJECT_BYTES  226u
+int bp_client_get_ex_dev_object(bp_client_t *client, const char *text_path,
+                                 uint16_t instance,
+                                 uint8_t out[BP_EX_DEV_OBJECT_BYTES]);
+
+/* bp_client_get_device_icp_object
+ *   OCXcip_GetDeviceICPObject: 20-byte EtherNet/IP IP-configuration
+ *   object (2 qwords + 1 uint32 — likely IP/netmask/gateway, not yet
+ *   verified). */
+#define BP_DEVICE_ICP_OBJECT_BYTES  20u
+int bp_client_get_device_icp_object(bp_client_t *client, const char *text_path,
+                                     uint16_t instance,
+                                     uint8_t out[BP_DEVICE_ICP_OBJECT_BYTES]);
 
 /* ============================================================
  * Module-side utilities — LED / Display / Switch position

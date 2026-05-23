@@ -130,6 +130,30 @@ class Client:
         SDK's IPC handle alive across multiple sessions."""
         self._raw.call("OCXcip_Close", 0x78, timeout_ms=5000)
 
+    def reconnect(self) -> None:
+        """Re-establish IPC after a bpServer restart.
+
+        INVALIDATES EVERYTHING the caller held: open pools, tag
+        databases, symbol caches, and class-3 TxRx state are all
+        wiped before the IPC restart.  Call ``open_session`` again
+        and re-open any pools / tag databases from scratch.
+
+        Raises BpClientOpen if the IPC reopen fails (typically
+        because bpServer isn't running yet).
+        """
+        with self._pools_mu:
+            slots = list(self._pools.keys())
+        for s in slots:
+            try:
+                self.pool_close(s)
+            except Exception:
+                pass
+        with self._tag_cache_mu:
+            self._tag_caches.clear()
+        with self._txrx_mu:
+            self._txrx_conns.clear()
+        self._raw.reconnect()
+
     def parse_path(self, text: str) -> "ParsedPath":
         """OCXcip_ParsePath: text path → encoded EPATH.
 
@@ -356,6 +380,118 @@ class Client:
         self._raw.call("OCXcip_GetDeviceIdStatus", 0x180,
                        fill=fill, read=read, timeout_ms=5000)
         return out_status
+
+    # ============================================================
+    # Wall-clock get/set (v0.10.0+)
+    # ============================================================
+    def _wctime_req(self, slot, path_bytes, instance, in_wc):
+        slot[P.HDR_PAYLOAD_START:P.HDR_PAYLOAD_START + len(path_bytes)] = path_bytes
+        slot[P.HDR_PAYLOAD_START + len(path_bytes)] = 0
+        struct.pack_into("<H", slot, 0x178, instance)
+        slot[0x17A] = 1 if in_wc is not None else 0
+        if in_wc is not None:
+            struct.pack_into("<6Q", slot, 0x180,
+                             in_wc.sec, in_wc.nsec,
+                             in_wc.aux0, in_wc.aux1, in_wc.aux2, in_wc.aux3)
+
+    def _wctime_decode(self, slot) -> "WCTime":
+        sec, nsec, a0, a1, a2, a3 = struct.unpack_from("<6Q", slot, 0x180)
+        return WCTime(sec=sec, nsec=nsec, aux0=a0, aux1=a1, aux2=a2, aux3=a3)
+
+    def _wctime_get(self, fn: str, path: str, instance: int) -> "WCTime":
+        if not path:
+            raise BpNullArg("path is required")
+        if len(path) > 254:
+            raise BpParamRange("path too long")
+        path_bytes = path.encode("ascii", "strict")
+        out: "WCTime | None" = None
+        dummy = WCTime()  # signal "have_buffer" flag
+
+        def fill(slot):
+            self._wctime_req(slot, path_bytes, instance, dummy)
+
+        def read(slot):
+            nonlocal out
+            out = self._wctime_decode(slot)
+
+        self._raw.call(fn, 0x1B0, fill=fill, read=read, timeout_ms=5000)
+        assert out is not None
+        return out
+
+    def _wctime_set(self, fn: str, path: str, instance: int, in_wc: "WCTime") -> None:
+        if not path or in_wc is None:
+            raise BpNullArg("path + in_wc required")
+        if len(path) > 254:
+            raise BpParamRange("path too long")
+        path_bytes = path.encode("ascii", "strict")
+
+        def fill(slot):
+            self._wctime_req(slot, path_bytes, instance, in_wc)
+
+        self._raw.call(fn, 0x1B0, fill=fill, timeout_ms=5000)
+
+    def get_wctime(self, path: str, instance: int = 1) -> "WCTime":
+        """OCXcip_GetWCTime: read local-time wall clock from device."""
+        return self._wctime_get("OCXcip_GetWCTime", path, instance)
+
+    def get_wctime_utc(self, path: str, instance: int = 1) -> "WCTime":
+        """OCXcip_GetWCTimeUTC: read UTC wall clock from device."""
+        return self._wctime_get("OCXcip_GetWCTimeUTC", path, instance)
+
+    def set_wctime(self, path: str, in_wc: "WCTime", instance: int = 1) -> None:
+        """OCXcip_SetWCTime: write local-time wall clock to device."""
+        self._wctime_set("OCXcip_SetWCTime", path, instance, in_wc)
+
+    def set_wctime_utc(self, path: str, in_wc: "WCTime", instance: int = 1) -> None:
+        """OCXcip_SetWCTimeUTC: write UTC wall clock to device."""
+        self._wctime_set("OCXcip_SetWCTimeUTC", path, instance, in_wc)
+
+    # ============================================================
+    # Extended device info + EtherNet/IP IP-config (v0.10.0+)
+    # ============================================================
+    def get_ex_dev_object(self, path: str, instance: int = 1) -> bytes:
+        """OCXcip_GetExDevObject: 226-byte extended device info
+        (28 qwords + uint16 trailer; vendor-specific layout)."""
+        if not path:
+            raise BpNullArg("path is required")
+        if len(path) > 254:
+            raise BpParamRange("path too long")
+        path_bytes = path.encode("ascii", "strict")
+        out = bytearray(226)
+
+        def fill(slot):
+            slot[P.HDR_PAYLOAD_START:P.HDR_PAYLOAD_START + len(path_bytes)] = path_bytes
+            slot[P.HDR_PAYLOAD_START + len(path_bytes)] = 0
+            struct.pack_into("<H", slot, 0x25A, instance)
+
+        def read(slot):
+            out[:] = slot[0x178:0x178 + 226]
+
+        self._raw.call("OCXcip_GetExDevObject", 0x260,
+                       fill=fill, read=read, timeout_ms=5000)
+        return bytes(out)
+
+    def get_device_icp_object(self, path: str, instance: int = 1) -> bytes:
+        """OCXcip_GetDeviceICPObject: 20-byte EtherNet/IP IP-config
+        object (2 qwords + 1 uint32; likely IP/netmask/gateway)."""
+        if not path:
+            raise BpNullArg("path is required")
+        if len(path) > 254:
+            raise BpParamRange("path too long")
+        path_bytes = path.encode("ascii", "strict")
+        out = bytearray(20)
+
+        def fill(slot):
+            slot[P.HDR_PAYLOAD_START:P.HDR_PAYLOAD_START + len(path_bytes)] = path_bytes
+            slot[P.HDR_PAYLOAD_START + len(path_bytes)] = 0
+            struct.pack_into("<H", slot, 0x18C, instance)
+
+        def read(slot):
+            out[:] = slot[0x178:0x178 + 20]
+
+        self._raw.call("OCXcip_GetDeviceICPObject", 0x190,
+                       fill=fill, read=read, timeout_ms=5000)
+        return bytes(out)
 
     def get_active_nodes(self) -> tuple[int, int]:
         """OCXcip_GetActiveNodeTable: returns (mask_lo, mask_hi)
@@ -967,6 +1103,20 @@ class Client:
                 finally:
                     if pool.initialized:
                         pool.free.put(i)
+
+
+@dataclass
+class WCTime:
+    """Raw 6-qword wall-clock struct (v0.10.0+).  Mirrors C
+    bp_wctime_t / Go ocxbp.WCTime.  ``sec`` is Unix epoch seconds
+    (UTC for the *_utc variants); ``aux0..aux3`` carry TZ/DST/leap
+    metadata in an as-yet-uncharacterized bit layout."""
+    sec: int = 0
+    nsec: int = 0
+    aux0: int = 0
+    aux1: int = 0
+    aux2: int = 0
+    aux3: int = 0
 
 
 @dataclass

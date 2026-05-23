@@ -55,6 +55,20 @@ const (
 	FnGetDeviceIdStatus        = "OCXcip_GetDeviceIdStatus"
 	SizeGetDeviceIdStatus uint32 = 0x180
 
+	FnGetWCTime           = "OCXcip_GetWCTime"
+	FnGetWCTimeUTC        = "OCXcip_GetWCTimeUTC"
+	FnSetWCTime           = "OCXcip_SetWCTime"
+	FnSetWCTimeUTC        = "OCXcip_SetWCTimeUTC"
+	SizeWCTime     uint32 = 0x1B0
+
+	FnGetExDevObject              = "OCXcip_GetExDevObject"
+	SizeGetExDevObject     uint32 = 0x260
+	ExDevObjectBytes              = 226
+
+	FnGetDeviceICPObject          = "OCXcip_GetDeviceICPObject"
+	SizeGetDeviceICPObject uint32 = 0x190
+	DeviceICPObjectBytes          = 20
+
 	FnGetActiveNodeTable        = "OCXcip_GetActiveNodeTable"
 	SizeGetActiveNodeTable uint32 = 0x80
 

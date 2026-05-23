@@ -256,6 +256,80 @@ and the relevant operations are:
 > object's status field at the same offset within the Identity
 > struct) until the bpServer behavior is RE'd separately.
 
+### `ReconnectClient` — IPC restart after bpServer restart (v0.10.0+, client-side)
+
+Not a wire opcode at all — `ReconnectClient` at
+`libocxbpapi-w.so:0x107e00` is a client-side helper that performs:
+
+1. `comClient.Close()` — close all 33 semaphores + munmap shm.
+2. `usleep(50000)` — 50 ms gap so a restarted bpServer can publish
+   its `/bpReq*` / `/bpResp*` named semaphores.
+3. `comClient.Open()` — reopen everything.
+
+The SDK exposes `bp_client_reconnect` / `Client.Reconnect` /
+`client.reconnect`.  These INVALIDATE EVERYTHING the caller held —
+pools, tag databases, symbol caches, and class-3 TxRx state are all
+wiped before the IPC restart.  After a successful reconnect callers
+re-call `open_session` and re-open any pools / tag databases.
+
+### Wall-clock get/set (v0.10.0+)
+
+```
+fn_name        = "OCXcip_GetWCTime" | "OCXcip_GetWCTimeUTC" |
+                 "OCXcip_SetWCTime" | "OCXcip_SetWCTimeUTC"
+payload_size   = 0x1B0
+
+REQUEST PAYLOAD:
+  slot + 0x078  char[255]  text_path        NUL-terminated, max 254 bytes
+  slot + 0x178  uint16     instance         normally 1
+  slot + 0x17A  uint8      have_buffer      1 if get/set input is present
+  slot + 0x180  uint64     sec              (input for Set; output for Get)
+  slot + 0x188  uint64     nsec
+  slot + 0x190  uint64     aux0             TZ / DST / leap metadata
+  slot + 0x198  uint64     aux1
+  slot + 0x1A0  uint64     aux2
+  slot + 0x1A8  uint64     aux3
+
+RESPONSE PAYLOAD (Get only):
+  Same 6 qwords at +0x180..+0x1B0 (engine overwrites).
+```
+
+Wire format from Ghidra: `OCXcip_GetWCTime @ 0x10e2e0`,
+`OCXcip_SetWCTime @ 0x10e4c0` (and the UTC variants at `0x10e6a0`,
+`0x10e894`).  Both Get and Set share the same payload layout — the
+`have_buffer` flag at `+0x17A` toggles whether the qword region is
+consumed (Set) or returned (Get).
+
+The four SDK helpers expose this as a raw 6-qword struct
+(`bp_wctime_t` / `ocxbp.WCTime` / `bpclient.WCTime`) — `sec` is
+Unix epoch seconds (UTC for the `*_utc` variants); `aux0..aux3`
+carry TZ/DST/leap-second metadata in a bit layout that we haven't
+fully characterized.  Typed `time.Time` / `datetime` conversion is
+deferred until we've validated those bits against Studio 5000.
+
+### Extended device info / IP config (v0.10.0+)
+
+```
+OCXcip_GetExDevObject — 226-byte extended device info:
+  payload_size = 0x260
+  request:  path at +0x78, instance at +0x25A (uint16)
+  response: 28 qwords + uint16 trailer at +0x178..+0x25A
+
+OCXcip_GetDeviceICPObject — 20-byte EtherNet/IP IP-config:
+  payload_size = 0x190
+  request:  path at +0x78, instance at +0x18C (uint16)
+  response: 2 qwords + 1 uint32 at +0x178..+0x18C
+```
+
+Both opcodes are exposed as raw-bytes accessors in the SDK
+(`bp_client_get_ex_dev_object` etc.).  Field-level decoders come
+back if a real consumer materializes; the engine returns
+structured data but its internal layout for the ExDev struct in
+particular is vendor-specific and worth deferring until needed.
+
+Wire format from Ghidra: `OCXcip_GetExDevObject @ 0x1087e4`,
+`OCXcip_GetDeviceICPObject @ 0x108d00`.
+
 ### `OCXcip_ParsePath` — text path → encoded EPATH (v0.10.0+ public; earlier diagnostic)
 
 ```

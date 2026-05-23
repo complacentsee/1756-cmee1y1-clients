@@ -3,6 +3,8 @@
 package ocxbp
 
 import (
+	"encoding/binary"
+
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/cip"
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/shm"
 )
@@ -71,6 +73,61 @@ func (c *Client) GetDeviceIDStatus(textPath string, instance uint16) (uint16, er
 		TimeoutMs:   5000,
 	})
 	return status, translateCallErr(err)
+}
+
+// GetExDevObject returns the 226-byte extended device info for the
+// device named by textPath.  Raw bytes — caller decodes the
+// vendor-specific layout (28 qwords + uint16 trailer).
+func (c *Client) GetExDevObject(textPath string, instance uint16) ([]byte, error) {
+	if c == nil || textPath == "" {
+		return nil, ErrNullArg
+	}
+	if len(textPath) > 254 {
+		return nil, ErrParamRange
+	}
+	out := make([]byte, cip.ExDevObjectBytes)
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnGetExDevObject,
+		PayloadSize: cip.SizeGetExDevObject,
+		Fill: func(slot []byte) {
+			n := len(textPath)
+			if n > 254 {
+				n = 254
+			}
+			copy(slot[shm.HdrPayloadStart:shm.HdrPayloadStart+n], textPath)
+			binary.LittleEndian.PutUint16(slot[0x25A:], instance)
+		},
+		Read:      func(slot []byte) { copy(out, slot[0x178:0x178+cip.ExDevObjectBytes]) },
+		TimeoutMs: 5000,
+	})
+	return out, translateCallErr(err)
+}
+
+// GetDeviceICPObject returns the 20-byte EtherNet/IP IP-config
+// object (2 qwords + 1 uint32; likely IP/netmask/gateway).
+func (c *Client) GetDeviceICPObject(textPath string, instance uint16) ([]byte, error) {
+	if c == nil || textPath == "" {
+		return nil, ErrNullArg
+	}
+	if len(textPath) > 254 {
+		return nil, ErrParamRange
+	}
+	out := make([]byte, cip.DeviceICPObjectBytes)
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnGetDeviceICPObject,
+		PayloadSize: cip.SizeGetDeviceICPObject,
+		Fill: func(slot []byte) {
+			n := len(textPath)
+			if n > 254 {
+				n = 254
+			}
+			copy(slot[shm.HdrPayloadStart:shm.HdrPayloadStart+n], textPath)
+			binary.LittleEndian.PutUint16(slot[0x18C:], instance)
+		},
+		Read:      func(slot []byte) { copy(out, slot[0x178:0x178+cip.DeviceICPObjectBytes]) },
+		TimeoutMs: 5000,
+	})
+	return out, translateCallErr(err)
 }
 
 // GetActiveNodes returns the 64-bit active-node bitmap as (lo, hi)

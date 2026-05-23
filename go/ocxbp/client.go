@@ -148,6 +148,37 @@ func (c *Client) ParsePath(text string) (ParsedPath, error) {
 	}, nil
 }
 
+// Reconnect re-establishes the IPC after a bpServer restart.
+// INVALIDATES EVERYTHING the caller held: open pools, tagdbs, and
+// symbol caches are all wiped before the IPC restart.  Callers must
+// call OpenSession again and re-open any pools / tag databases after
+// a successful Reconnect.
+//
+// Returns ErrClientOpen if any sem/shm reopen fails (typically
+// bpServer not running yet).
+func (c *Client) Reconnect() error {
+	if c == nil {
+		return ErrNullArg
+	}
+	// Tear down caller-held state.
+	for s := 0; s < PoolMaxSlots; s++ {
+		c.poolsMu.Lock()
+		p := c.pools[s]
+		c.poolsMu.Unlock()
+		if p != nil {
+			_ = c.PoolClose(uint8(s))
+		}
+	}
+	c.tagCacheMu.Lock()
+	c.tagCaches = make(map[string]*tagCache)
+	c.tagCacheMu.Unlock()
+	c.txrxMu.Lock()
+	c.txrxMap = make(map[uint16]*txrxState)
+	c.txrxMu.Unlock()
+
+	return translateCallErr(c.shm.Reconnect())
+}
+
 // CloseSession dispatches OCXcip_Close to release the engine-side
 // session opened by OpenSession.  Client.Close calls this
 // automatically; explicit invocation is only needed if you want to

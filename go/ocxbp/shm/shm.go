@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -88,6 +89,70 @@ func Open() (*Client, error) {
 	}
 
 	return c, nil
+}
+
+// Reconnect closes the existing IPC, waits 50 ms, and reopens shm +
+// semaphores against the (presumably-restarted) bpServer.  Mirrors
+// the OEM ReconnectClient at libocxbpapi-w.so:0x107e00.  Returns
+// ErrClientOpen if any shm_open / mmap / sem_open fails (bpServer
+// not running yet).
+func (c *Client) Reconnect() error {
+	if c == nil {
+		return ErrNullArg
+	}
+	// Close existing IPC.
+	for i := 0; i < SlotCount; i++ {
+		if c.semReq[i] != nil {
+			c.semReq[i].Close()
+			c.semReq[i] = nil
+		}
+		if c.semResp[i] != nil {
+			c.semResp[i].Close()
+			c.semResp[i] = nil
+		}
+	}
+	if c.semLock != nil {
+		c.semLock.Close()
+		c.semLock = nil
+	}
+	if c.shm != nil {
+		unix.Munmap(c.shm)
+		c.shm = nil
+	}
+	if c.shmFd > 0 {
+		unix.Close(c.shmFd)
+		c.shmFd = -1
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Re-init IPC (mirrors Open()).
+	fd, err := unix.Open(ShmPath, unix.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("%w: open(%s): %v", ErrClientOpen, ShmPath, err)
+	}
+	buf, err := unix.Mmap(fd, 0, ShmTotalSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		unix.Close(fd)
+		return fmt.Errorf("%w: mmap: %v", ErrClientOpen, err)
+	}
+	c.shmFd = fd
+	c.shm = buf
+	c.semLock, err = semOpen(SemShmLock)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrClientOpen, err)
+	}
+	for i := 0; i < SlotCount; i++ {
+		c.semReq[i], err = semOpen(fmt.Sprintf("%s%02d", SemReqPrefix, i))
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrClientOpen, err)
+		}
+		c.semResp[i], err = semOpen(fmt.Sprintf("%s%02d", SemRespPrefix, i))
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrClientOpen, err)
+		}
+	}
+	return nil
 }
 
 // Close releases all IPC resources. Safe to call on a nil receiver

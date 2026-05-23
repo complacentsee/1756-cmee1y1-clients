@@ -29,6 +29,7 @@ set(LIB_SOURCES
     src/tagcache.c
     src/multitag.c
     src/path.c
+    src/wctime.c
 )
 
 # Shared library

@@ -320,3 +320,58 @@ int bp_client_close_session(bp_client_t *c) {
     };
     return bp_client_call(c, &spec);
 }
+
+/* bp_client_reconnect — IPC restart after bpServer restart.  Mirrors
+ * OEM ReconnectClient @ libocxbpapi-w.so:0x107e00 which does
+ * comClient.Close() + sleep(50ms) + comClient.Open(). */
+int bp_client_reconnect(bp_client_t *c) {
+    if (!c) return BP_ERR_NULL_ARG;
+
+    /* Invalidate caller-held state.  Pools, tagdb caches, and the
+     * recorded CIP error all reference the old IPC; tear them down
+     * before the IPC restart per the documented "invalidate
+     * everything" semantics. */
+    for (int s = 0; s < BP_POOL_MAX_SLOTS; s++) {
+        if (c->pools[s].initialized) (void)bp_client_pool_close(c, (uint8_t)s);
+    }
+    bp_tag_cache_free_all(c);
+
+    /* Close existing IPC. */
+    for (int i = 0; i < BP_SLOT_COUNT; i++) {
+        if (c->sem_req[i])  { sem_close(c->sem_req[i]);  c->sem_req[i]  = NULL; }
+        if (c->sem_resp[i]) { sem_close(c->sem_resp[i]); c->sem_resp[i] = NULL; }
+    }
+    if (c->sem_shmlock) { sem_close(c->sem_shmlock); c->sem_shmlock = NULL; }
+    if (c->shm)        { munmap(c->shm, BP_SHM_TOTAL_SIZE); c->shm = NULL; }
+    if (c->shm_fd >= 0) { close(c->shm_fd); c->shm_fd = -1; }
+
+    /* 50 ms gap so a freshly-restarted bpServer has time to publish
+     * its /bpReq*/bpResp* semaphores. */
+    struct timespec ts = { 0, 50 * 1000000L };
+    nanosleep(&ts, NULL);
+
+    /* Re-init IPC (mirrors bp_client_open's IPC steps). */
+    c->shm_fd = shm_open(BP_SHM_NAME, O_RDWR, 0);
+    if (c->shm_fd < 0) return BP_ERR_CLIENT_OPEN;
+    void *m = mmap(NULL, BP_SHM_TOTAL_SIZE, PROT_READ | PROT_WRITE,
+                   MAP_SHARED, c->shm_fd, 0);
+    if (m == MAP_FAILED) {
+        close(c->shm_fd); c->shm_fd = -1;
+        return BP_ERR_CLIENT_OPEN;
+    }
+    c->shm = m;
+
+    c->sem_shmlock = sem_open(BP_SEM_SHMLOCK, 0);
+    if (c->sem_shmlock == SEM_FAILED) { c->sem_shmlock = NULL; return BP_ERR_CLIENT_OPEN; }
+
+    for (int i = 0; i < BP_SLOT_COUNT; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "/bpReq%02d", i);
+        c->sem_req[i] = sem_open(name, 0);
+        if (c->sem_req[i] == SEM_FAILED) { c->sem_req[i] = NULL; return BP_ERR_CLIENT_OPEN; }
+        snprintf(name, sizeof(name), "/bpResp%02d", i);
+        c->sem_resp[i] = sem_open(name, 0);
+        if (c->sem_resp[i] == SEM_FAILED) { c->sem_resp[i] = NULL; return BP_ERR_CLIENT_OPEN; }
+    }
+    return BP_OK;
+}

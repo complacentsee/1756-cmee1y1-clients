@@ -110,6 +110,15 @@ class Client:
                 pass
             self._shm_fd = None
 
+    def reconnect(self) -> None:
+        """Close + sleep 50 ms + reopen IPC.  Mirrors the OEM
+        ReconnectClient at libocxbpapi-w.so:0x107e00 for use after
+        a bpServer restart."""
+        import time
+        self.close()
+        time.sleep(0.050)
+        self.open()
+
     def __enter__(self) -> "Client":
         self.open()
         return self
