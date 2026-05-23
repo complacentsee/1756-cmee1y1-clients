@@ -16,9 +16,9 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.9.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.9.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.9.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.10.0) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.10.0) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.10.0) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
@@ -40,8 +40,30 @@ missing from the cm1756 image.  Wire format in
 [`docs/protocol.md`](docs/protocol.md) "Connected messaging —
 wire format".
 
-**v0.9.0 (current)** adds an application-layer ergonomic surface on
-top of v0.8.0's transport primitives:
+**v0.10.0 (current)** adds OEM-parity utility + resilience opcodes,
+all wire-format-anchored against Ghidra decompiles of
+`libocxbpapi-w.so`:
+
+- **`OCXcip_ErrorString`** — engine-owned `rc → string` lookup.
+  Surfaces engine-internal codes the SDK's hardcoded `bp_strerror`
+  doesn't know.  Confirmed engine code 8 = "Unable to allocate
+  memory" — the long-standing bpServer leak symptom from v0.9.0.
+- **`OCXcip_ParsePath`** — promoted from diagnostic to public
+  `bp_client_parse_path` / `Client.ParsePath` / `client.parse_path`.
+- **`OCXcip_GetDeviceIdStatus`** — lightweight Identity status
+  probe.  Engine accepts the dispatch but cm1756 bpServer leaves
+  the response bytes empty; documented as a server-side divergence.
+- **`ReconnectClient`** — IPC restart after bpServer restart.
+  Wipes pools / tagdbs / symbol caches; callers re-`open_session`
+  and re-open from scratch.
+- **`OCXcip_GetWCTime` / `SetWCTime` + UTC variants** — read/write
+  the wall-clock object on a remote device.  Raw 6-qword struct;
+  `time.Time` / `datetime` conversion deferred.
+- **`OCXcip_GetExDevObject` / `GetDeviceICPObject`** — raw-bytes
+  accessors for extended device info + EtherNet/IP IP-config.
+
+**v0.9.0** added an application-layer ergonomic surface on top of
+v0.8.0's transport primitives:
 
 - **Per-client symbol cache** — `lookup_symbol(name)` / `preload_symbols()`
   on a TagDB amortize the per-symbol IPC across the first scan-loop
@@ -380,6 +402,8 @@ Override the default `tagtest` entrypoint via Docker's
 | `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
 | `symcache`     | v0.9.0 symbol-cache validator (lookup cold / warm / preload timing) |
 | `multitagtest` | v0.9.0 read_tags + write_tags mixed-type batch round-trip with type validation |
+| `errstr`       | v0.10.0 OCXcip_ErrorString validator (sweep known + unknown rc codes) |
+| `idstatus`     | v0.10.0 OCXcip_GetDeviceIdStatus cross-check against full Identity |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
