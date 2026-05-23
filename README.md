@@ -16,9 +16,9 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.10.3) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.10.3) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.10.3) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.10.4) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.10.4) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.10.4) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
@@ -26,8 +26,10 @@ the `typetest` cross-type sweep (scalars × 11 + STRING + DINT[1-D]
 + BOOL[] + DINT[2-D] + DINT[3-D]), the v0.7.0 `conntest` class-3
 round-trip, the v0.8.0 `pooltest` (M-worker fanout + `--batch`),
 the v0.8.0 `routedident` (Unconnected_Send routing), the v0.9.0
-`symcache` (lookup cold/warm/preload), and the v0.9.0 `multitagtest`
-(read_tags + write_tags round-trip with type validation) — all
+`symcache` (lookup cold/warm/preload), the v0.9.0 `multitagtest`
+(read_tags + write_tags round-trip with type validation), and the
+v0.10.4 `accessdbtest` (AccessTagDataDb vs AccessTagData correctness
++ batch=1/4/16 latency) — all
 **byte-identically** modulo timings.  See [`runprobe.py`](runprobe.py)
 for the shared cross-language runner.
 
@@ -40,18 +42,42 @@ missing from the cm1756 image.  Wire format in
 [`docs/protocol.md`](docs/protocol.md) "Connected messaging —
 wire format".
 
-**v0.10.3 (current)** adds two further parity items on top of
-v0.10.2:
+**v0.10.4 (current)** adds the `OCXcip_AccessTagDataDb` opcode as a
+peer of `OCXcip_AccessTagData`:
+
+- **`bp_tagdb_access_db`** / **`TagDB.AccessDb`** / **`TagDB.access_db`** —
+  same shape as the existing `access` API, but routes through the
+  cached `db_handle` from `CreateTagDbHandle` instead of re-sending
+  the 255-byte path string per call.  Ghidra-anchored at
+  `libocxbpapi-w.so:0x10DEE0`; per-byte wire-format trace in
+  [`docs/access-tag-data-db.md`](docs/access-tag-data-db.md);
+  canonical spec section in
+  [`docs/protocol.md`](docs/protocol.md) "OCXcip_AccessTagDataDb".
+- **Empirical perf** (cm1756 + L85 P:1,S:2, 200-iteration sweeps via
+  `accessdbtest`): single-DINT load is noise, but at batch=4 the C
+  SDK measures **+9.01%** per-tag latency win vs `bp_tagdb_access`.
+  Go and Python see no measurable gain — their per-Call host-side
+  overhead dominates the engine-side savings.  **The v0.9.0
+  `read_tags` / `write_tags` ergonomics keep using
+  `bp_tagdb_access`** to preserve cross-language byte-identical
+  behavior; callers who want the perf win opt in by calling
+  `bp_tagdb_access_db` directly.
+- **Field `+0x118` is a write-mask seed, not a type cookie.** Phase 1
+  RE traced `func_0x001041F0` to `_Z9GetWrMaskjPv`
+  (`GetWrMask(uint type, void *data)` at `libocxbpapi-w.so:0x10CF40`)
+  via the PLT.  The OEM wrapper writes this field only when the
+  caller passes a non-NULL data pointer; this SDK always marshals
+  data inline in the slot data area (mirroring `AccessTagData`) and
+  sets `has_data = 0` / `mask_seed = 0` accordingly.  Engine accepts
+  this on the cm1756 / L85 — validated by NEW-write → OLD-readback
+  round-trips at batch sizes 1, 4, and 16.
+
+**v0.10.3** adds two further parity items on top of v0.10.2:
 
 - **`OCXcip_Dummy`** — bare-header server roundtrip exposed as
   `bp_client_dummy` / `Client.Dummy` / `client.dummy`.  Cheap
   (~50 µs) liveness probe that doesn't allocate engine state.
-  Ghidra-anchored at `libocxbpapi-w.so:0x10A180`.  Skipped during
-  this RE pass: `ServerError` (client-side log writer, not an RPC)
-  and `OCXcip_AccessTagDataDb` (alternate AccessTagData using a
-  db_handle; saves path-parse on the server but the existing
-  `bp_tagdb_access` already runs at 4000+ req/s, so the wire-layout
-  complexity isn't justified).
+  Ghidra-anchored at `libocxbpapi-w.so:0x10A180`.
 - **WCTime LOCAL `aux2` decoder** (PROVISIONAL) — `bp_wctime_decode_local`
   / `WCTime.DecodeLocal` / `WCTime.decode_local` extracts
   `(day, hour, minute, second)` from `aux2` as four LE uint16s.
@@ -431,6 +457,7 @@ Override the default `tagtest` entrypoint via Docker's
 | `idstatus`     | v0.10.0 OCXcip_GetDeviceIdStatus cross-check against full Identity |
 | `wctime`       | v0.10.0/v0.10.3 wall-clock validator across slots 1..3 (`--raw` dumps aux qwords) |
 | `dummy`        | v0.10.3 OCXcip_Dummy liveness-probe latency bench (N round-trips) |
+| `accessdbtest` | v0.10.4 OCXcip_AccessTagDataDb correctness + latency vs AccessTagData (`--batch N` 1..16, `--write`) |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |

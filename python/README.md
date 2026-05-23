@@ -68,6 +68,7 @@ py runprobe.py --image bpclient-python-tagtest:dev tagtest
 | `idstatus`     | v0.10.0 OCXcip_GetDeviceIdStatus cross-check vs full Identity |
 | `wctime`       | v0.10.0/v0.10.3 wall-clock + epoch decode + `--raw` aux dump |
 | `dummy`        | v0.10.3 OCXcip_Dummy liveness-probe latency bench |
+| `accessdbtest` | v0.10.4 OCXcip_AccessTagDataDb correctness + latency vs AccessTagData (`--batch N`, `--write`) |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
@@ -93,9 +94,20 @@ BP_PLC_PATH=P:1,S:2 pytest tests/                      # + end-to-end
 
 ## Status
 
-v0.9.0.  Outbound tag I/O fully functional including v0.9.0's
-application-layer ergonomic surface on top of the v0.8.0 transport
-primitives:
+v0.10.4.  Outbound tag I/O fully functional.  v0.10.4 adds the
+`OCXcip_AccessTagDataDb` opcode (`TagDB.access_db`) as a peer of
+`TagDB.access`, using the cached `db_handle` instead of re-sending
+the path string per call.  Wire-format trace in
+[`docs/access-tag-data-db.md`](../docs/access-tag-data-db.md);
+canonical spec in [`docs/protocol.md`](../docs/protocol.md).
+Validated against the L85 via `examples/accessdbtest.py`
+(byte-identical NEW-vs-OLD reads at batch=1/4/16; NEW-write ->
+OLD-readback clean).  `read_tags` / `write_tags` keep using
+`access` to preserve cross-language byte-identical behavior;
+callers wanting the perf opt in by calling `access_db` directly.
+
+v0.9.0 added the application-layer ergonomic surface on top of
+v0.8.0's transport primitives:
 
 - `db.lookup_symbol(name)` / `db.preload_symbols()` — per-client
   symbol cache amortizes the per-symbol IPC.

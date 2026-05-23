@@ -19,13 +19,13 @@ cmake --build build --parallel
 ```
 
 Produces:
-- `build/libbpclient.so.0.9.0` — shared library
+- `build/libbpclient.so.0.10.4` — shared library
 - `build/libbpclient.a` — static library
 - `build/tagtest` — the canonical smoke test executable
   (plus the other diagnostic binaries listed in
   [`CMakeLists.txt`](CMakeLists.txt): `msgprobe`, `identity`,
   `connidentity`, `conntest`, `pooltest`, `routedident`, `symcache`,
-  `multitagtest`, `pathprobe`, `actnodes`, `modutil`, etc.)
+  `multitagtest`, `accessdbtest`, `pathprobe`, `actnodes`, `modutil`, etc.)
 
 System install:
 
@@ -115,6 +115,7 @@ c/
 │   ├── client.c              Open/Close + slot dispatch (bp_client_call)
 │   ├── tagdb.c               CreateTagDbHandle / BuildTagDb / GetSymbolInfo
 │   ├── access.c              AccessTagData + scalar R/W helpers
+│   ├── accessdb.c            AccessTagDataDb (v0.10.4+, handle-based peer of access.c)
 │   ├── message.c             OCXcip_MessageSend (UCMM CIP)
 │   ├── conn.c                bp_client_txrx_* (LFO + MessageSend, v0.7.0+)
 │   ├── pool.c                bp_client_pool_* (pool + keepalive + batch + auto-reopen, v0.8.0+/v0.9.0+)

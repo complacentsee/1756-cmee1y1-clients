@@ -91,6 +91,7 @@ runtime (carries glibc + dynamic loader for the cgo POSIX-sem wrapper).
 | `idstatus`     | v0.10.0 OCXcip_GetDeviceIdStatus cross-check vs full Identity |
 | `wctime`       | v0.10.0/v0.10.3 wall-clock + epoch decode + `--raw` aux dump |
 | `dummy`        | v0.10.3 OCXcip_Dummy liveness-probe latency bench |
+| `accessdbtest` | v0.10.4 OCXcip_AccessTagDataDb correctness + latency vs AccessTagData (`--batch N`, `--write`) |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
@@ -107,6 +108,7 @@ go/
 │   ├── client.go              Client (Open, OpenSession, SHM accessor)
 │   ├── tagdb.go               TagDB
 │   ├── access.go              scalar read/write helpers
+│   ├── accessdb.go            AccessDb (v0.10.4+, handle-based peer of Access)
 │   ├── identity.go            GetIDLocal / GetDeviceID / GetActiveNodes
 │   ├── module.go              switch / LED / display
 │   ├── message.go             MessageSend (UCMM)
@@ -140,9 +142,20 @@ its own slot across all 16 slots, gated by the cross-process
 
 ## Status
 
-v0.9.0.  Outbound tag I/O fully functional including v0.9.0's
-application-layer ergonomic surface on top of the v0.8.0 transport
-primitives:
+v0.10.4.  Outbound tag I/O fully functional.  v0.10.4 adds the
+`OCXcip_AccessTagDataDb` opcode (`TagDB.AccessDb`) as a peer of
+`TagDB.Access`, using the cached `db_handle` instead of re-sending
+the path string per call.  Wire-format trace in
+[`docs/access-tag-data-db.md`](../docs/access-tag-data-db.md);
+canonical spec in [`docs/protocol.md`](../docs/protocol.md).
+Validated against the L85 via `cmd/accessdbtest` (byte-identical
+NEW-vs-OLD reads at batch=1/4/16; NEW-write -> OLD-readback
+clean).  `ReadTags` / `WriteTags` keep using `Access` to preserve
+cross-language byte-identical behavior; callers wanting the perf
+opt in by calling `AccessDb` directly.
+
+v0.9.0 added the application-layer ergonomic surface on top of
+v0.8.0's transport primitives:
 
 - `LookupSymbol(name)` / `PreloadSymbols()` — per-client symbol
   cache amortizes the per-symbol IPC.
