@@ -99,6 +99,60 @@ int bp_client_get_device_id(bp_client_t *cl, const char *path,
 }
 
 /* ============================================================
+ * GetDeviceIdStatus — v0.10.0+ lightweight status-word probe
+ *
+ * Request mirrors GetDeviceIdObject: text_path at +0x78, instance
+ * at +0x178.  Response is just a uint16 status at +0x178 (overlapping
+ * the consumed input).  Wire address: libocxbpapi-w.so:0x108740
+ * (RE'd from sibling tools/phase2_plc_mode.py ctypes signature).
+ *
+ * Payload size set to 0x180 — covers path+instance input region;
+ * engine writes 2-byte response within bounds.
+ * ============================================================ */
+typedef struct {
+    const char *path;
+    uint16_t    instance;
+    uint16_t    out_status;
+} gids_ctx_t;
+
+static void gids_fill(uint8_t *slot, void *user) {
+    gids_ctx_t *c = user;
+    size_t n = strlen(c->path);
+    if (n > 254) n = 254;
+    memcpy(slot + 0x78, c->path, n);
+    *(slot + 0x78 + n) = 0;
+    bp_st_u16(slot + 0x178, c->instance);
+}
+
+static void gids_read(uint8_t *slot, void *user) {
+    gids_ctx_t *c = user;
+    /* RE'd against the live engine — the engine overwrites the input
+     * path text with the 16-bit status response starting at the
+     * standard payload-start offset (+0x78).  Earlier attempts at
+     * +0x178 (= consumed instance field) and +0x180 (= Identity
+     * status-field offset) both returned wrong data. */
+    c->out_status = bp_ld_u16(slot + 0x78);
+}
+
+int bp_client_get_device_id_status(bp_client_t *cl, const char *path,
+                                    uint16_t instance, uint16_t *out_status) {
+    if (!cl || !path || !out_status) return BP_ERR_NULL_ARG;
+    if (strlen(path) > 254)           return BP_ERR_PARAM_RANGE;
+    gids_ctx_t ctx = { .path = path, .instance = instance };
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_GetDeviceIdStatus",
+        .payload_size = 0x180,
+        .fill_payload = gids_fill,
+        .read_reply   = gids_read,
+        .timeout_ms   = 5000,
+        .user         = &ctx,
+    };
+    int rc = bp_client_call(cl, &spec);
+    if (rc == BP_OK) *out_status = ctx.out_status;
+    return rc;
+}
+
+/* ============================================================
  * GetActiveNodeTable
  * ============================================================ */
 typedef struct { uint32_t lo, hi; } an_ctx_t;

@@ -143,6 +143,11 @@ target_link_libraries(multitagtest PRIVATE bpclient pthread rt)
 add_executable(errstr examples/errstr.c)
 target_link_libraries(errstr PRIVATE bpclient pthread rt)
 
+# Example: idstatus — v0.10.0 OCXcip_GetDeviceIdStatus validator
+# (cross-checks lightweight status against full GetDeviceIdObject).
+add_executable(idstatus examples/idstatus.c)
+target_link_libraries(idstatus PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -176,5 +181,6 @@ install(TARGETS
             symcache
             multitagtest
             errstr
+            idstatus
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

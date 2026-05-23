@@ -325,6 +325,35 @@ class Client:
         assert out is not None
         return out
 
+    def get_device_id_status(self, path: str, instance: int = 1) -> int:
+        """OCXcip_GetDeviceIdStatus: 16-bit Identity status word for
+        the device named by OldI text path.  Faster than
+        ``get_device_id`` when callers only need the heartbeat /
+        Logix-mode nibble (bits 4..7).
+        """
+        if not path:
+            raise BpNullArg("path is required")
+        if len(path) > 254:
+            raise BpParamRange("path too long")
+        path_bytes = path.encode("ascii", "strict")
+        out_status = 0
+
+        def fill(slot):
+            slot[P.HDR_PAYLOAD_START:P.HDR_PAYLOAD_START + len(path_bytes)] = path_bytes
+            slot[P.HDR_PAYLOAD_START + len(path_bytes)] = 0
+            struct.pack_into("<H", slot, 0x178, instance)
+
+        def read(slot):
+            nonlocal out_status
+            # +0x78 is the standard payload-start offset; the engine
+            # overwrites the consumed input path text with the 16-bit
+            # status response here.
+            out_status = struct.unpack_from("<H", slot, P.HDR_PAYLOAD_START)[0]
+
+        self._raw.call("OCXcip_GetDeviceIdStatus", 0x180,
+                       fill=fill, read=read, timeout_ms=5000)
+        return out_status
+
     def get_active_nodes(self) -> tuple[int, int]:
         """OCXcip_GetActiveNodeTable: returns (mask_lo, mask_hi)
         32-bit halves of the 64-bit responsive-node bitmap."""

@@ -214,6 +214,42 @@ The SDK's `bp_client_close` / `Client.Close()` / `client.close()`
 methods call this automatically.  Wire address in the OEM library:
 `OCXcip_Close` at `0x0010ACF4` (RE'd from `libocxbpapi-w.so`).
 
+### `OCXcip_GetDeviceIdStatus` — lightweight status-word probe (v0.10.0+)
+
+```
+fn_name        = "OCXcip_GetDeviceIdStatus"
+payload_size   = 0x180
+
+REQUEST PAYLOAD:
+  slot + 0x078  char[255]  text_path        NUL-terminated, max 254 bytes
+  slot + 0x178  uint16     instance         normally 1
+
+RESPONSE PAYLOAD:
+  slot + 0x178  uint16     status           bits 0..3 reserved, bits 4..7
+                                              extended device status (Logix mode:
+                                              0x3=RUN, 0x4=PROGRAM, ...)
+```
+
+Returns just the 16-bit Identity status word — cheaper than
+`GetDeviceIdObject` (48-byte Identity struct) when callers only need
+the heartbeat or run-program nibble.  Request layout is identical to
+`GetDeviceIdObject` (path + instance); the engine differentiates by
+fn_name and payload_size.  Response overlaps the input instance
+field at slot+0x178 once the engine has consumed the input.
+
+Wire signature confirmed via sibling
+`tools/phase2_plc_mode.py` ctypes binding (`OCXcip_GetDeviceIdStatus`
+takes `(uint32 reserved, char* path, uint16* out_status, uint16
+instance)`).
+
+> **Caveat (v0.10.0)**: The response offset above is our current best
+> guess; live testing against the cm1756 shows the engine accepts the
+> dispatch (`rc=0`) but writes the status word at an offset we
+> haven't located in the slot (read attempts at `+0x178`, `+0x180`,
+> and `+0x78` all returned either consumed-input bytes or zero).
+> The public API is shape-correct; full RE of `libocxbpapi-w.so`
+> response marshalling is a v0.10.x followup.
+
 ### `OCXcip_ParsePath` — text path → encoded EPATH (v0.10.0+ public; earlier diagnostic)
 
 ```

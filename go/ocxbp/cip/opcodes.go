@@ -52,6 +52,9 @@ const (
 	FnGetDeviceIdObject        = "OCXcip_GetDeviceIdObject"
 	SizeGetDeviceIdObject uint32 = 0x1B0
 
+	FnGetDeviceIdStatus        = "OCXcip_GetDeviceIdStatus"
+	SizeGetDeviceIdStatus uint32 = 0x180
+
 	FnGetActiveNodeTable        = "OCXcip_GetActiveNodeTable"
 	SizeGetActiveNodeTable uint32 = 0x80
 

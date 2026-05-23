@@ -308,6 +308,20 @@ int bp_client_get_active_nodes(bp_client_t *client,
                                 uint32_t *out_mask_low,
                                 uint32_t *out_mask_high);
 
+/* bp_client_get_device_id_status  (v0.10.0+)
+ *   Wraps OCXcip_GetDeviceIdStatus: returns just the 16-bit Identity
+ *   status word for the device named by `text_path`.  Faster than
+ *   bp_client_get_device_id when callers only need the heartbeat /
+ *   run-program state.
+ *
+ *   Per ODVA Vol 1, the status word's extended-device-status nibble
+ *   (bits 4..7) carries the Logix controller mode for ControlLogix:
+ *     0x3 = RUN, 0x4 = PROGRAM, 0x5 = SAFE_OPERATIONAL, etc. */
+int bp_client_get_device_id_status(bp_client_t *client,
+                                    const char *text_path,
+                                    uint16_t instance,
+                                    uint16_t *out_status);
+
 /* ============================================================
  * Module-side utilities — LED / Display / Switch position
  *

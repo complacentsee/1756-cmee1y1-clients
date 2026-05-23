@@ -54,6 +54,21 @@ func DecodeGetDeviceId(slot []byte) IDObject {
 	return decodeID(slot[0x178:])
 }
 
+// EncodeGetDeviceIdStatus mirrors EncodeGetDeviceId — same request
+// layout (path + instance) since the engine differentiates only by
+// fn_name + payload_size.
+func EncodeGetDeviceIdStatus(slot []byte, path string, instance uint16) {
+	EncodeGetDeviceId(slot, path, instance)
+}
+
+// DecodeGetDeviceIdStatus reads the 16-bit status response.  RE'd
+// against the live engine — the response is written at the standard
+// payload-start offset (+0x78), overwriting the consumed input path
+// text.
+func DecodeGetDeviceIdStatus(slot []byte) uint16 {
+	return binary.LittleEndian.Uint16(slot[HdrPayloadStart:])
+}
+
 // DecodeGetActiveNodes returns (lo, hi) 32-bit halves of the
 // 64-bit active-node bitmap. Bit N in (lo | hi<<32) is set when
 // node N is responsive.

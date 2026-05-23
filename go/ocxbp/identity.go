@@ -51,6 +51,28 @@ func (c *Client) GetDeviceID(textPath string, instance uint16) (IDObject, error)
 	return out, translateCallErr(err)
 }
 
+// GetDeviceIDStatus returns just the 16-bit Identity status word
+// for the device named by textPath / instance.  Faster than
+// GetDeviceID when callers only need the heartbeat / Logix-mode
+// nibble (bits 4..7).
+func (c *Client) GetDeviceIDStatus(textPath string, instance uint16) (uint16, error) {
+	if c == nil || textPath == "" {
+		return 0, ErrNullArg
+	}
+	if len(textPath) > 254 {
+		return 0, ErrParamRange
+	}
+	var status uint16
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnGetDeviceIdStatus,
+		PayloadSize: cip.SizeGetDeviceIdStatus,
+		Fill:        func(slot []byte) { cip.EncodeGetDeviceIdStatus(slot, textPath, instance) },
+		Read:        func(slot []byte) { status = cip.DecodeGetDeviceIdStatus(slot) },
+		TimeoutMs:   5000,
+	})
+	return status, translateCallErr(err)
+}
+
 // GetActiveNodes returns the 64-bit active-node bitmap as (lo, hi)
 // 32-bit halves. Bit N in (lo | hi<<32) is set when node N is
 // responsive on the backplane.
