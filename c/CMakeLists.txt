@@ -149,6 +149,11 @@ target_link_libraries(errstr PRIVATE bpclient pthread rt)
 add_executable(idstatus examples/idstatus.c)
 target_link_libraries(idstatus PRIVATE bpclient pthread rt)
 
+# Example: wctime — v0.10.0 GetWCTime/GetWCTimeUTC validator
+# (dumps the wall-clock object across slots 1..3).
+add_executable(wctime examples/wctime.c)
+target_link_libraries(wctime PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -183,5 +188,6 @@ install(TARGETS
             multitagtest
             errstr
             idstatus
+            wctime
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

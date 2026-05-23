@@ -346,7 +346,7 @@ int bp_client_reconnect(bp_client_t *c) {
     if (c->shm_fd >= 0) { close(c->shm_fd); c->shm_fd = -1; }
 
     /* 50 ms gap so a freshly-restarted bpServer has time to publish
-     * its /bpReq*/bpResp* semaphores. */
+     * its /bpReqNN + /bpRespNN semaphores. */
     struct timespec ts = { 0, 50 * 1000000L };
     nanosleep(&ts, NULL);
 

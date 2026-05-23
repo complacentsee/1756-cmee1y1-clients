@@ -40,6 +40,7 @@ RUN mkdir -p /out/bin && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/multitagtest ./cmd/multitagtest && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/errstr       ./cmd/errstr       && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/idstatus     ./cmd/idstatus     && \
+    CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/wctime       ./cmd/wctime       && \
     CGO_ENABLED=1 go build -trimpath -ldflags '-s -w' -o /out/bin/typetest     ./cmd/typetest
 
 # Runtime: distroless/cc carries glibc + dynamic loader (needed
