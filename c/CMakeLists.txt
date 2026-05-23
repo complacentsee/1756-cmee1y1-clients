@@ -19,6 +19,7 @@ set(LIB_SOURCES
     src/client.c
     src/tagdb.c
     src/access.c
+    src/accessdb.c
     src/errors.c
     src/message.c
     src/identity.c
@@ -162,6 +163,12 @@ target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
 add_executable(dummy examples/dummy.c)
 target_link_libraries(dummy PRIVATE bpclient pthread rt)
 
+# Example: accessdbtest — v0.10.4 OCXcip_AccessTagDataDb correctness +
+# latency validator (cross-checks NEW handle-based path against OLD
+# path-string path; reports median + p99 per call for each).
+add_executable(accessdbtest examples/accessdbtest.c)
+target_link_libraries(accessdbtest PRIVATE bpclient pthread rt)
+
 # Install
 include(GNUInstallDirs)
 install(TARGETS bpclient
@@ -195,4 +202,5 @@ install(TARGETS
             wctime
             udtinfo
             dummy
+            accessdbtest
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

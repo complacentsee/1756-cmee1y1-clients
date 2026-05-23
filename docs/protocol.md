@@ -19,6 +19,8 @@ reverse-engineering work in `complacentsee/rockwell-bpgateway-re`:
   `OCXcip_GetSymbolInfo`: `docs/phase1-results.md`
 - `OCXcip_AccessTagData` field semantics fix
   (`elem_byte_size`/`elem_count` correction): `docs/phase2-results.md`
+- `OCXcip_AccessTagDataDb` wire format + `mask_seed` semantics
+  (v0.10.4): `docs/access-tag-data-db.md`
 - Error codes: `include/ocxbpapi.h` `OCX_ERR_*` constants
 - Path-string format quirk: `tools/probe_path_format.py`
 
@@ -1053,6 +1055,128 @@ because `elem_byte_size == elem_count == 1` for a scalar BOOL. The
 inversion only bit on writes (data wasn't sent to the PLC) or on
 multi-element accesses (truncation or buffer overrun).
 
+### `OCXcip_AccessTagDataDb` — batched read/write using a cached tag-DB handle (v0.10.4+)
+
+Peer of `OCXcip_AccessTagData` that trades the 255-byte per-call
+path string for a 4-byte `db_handle` lookup.  Same opcode (0xCA),
+same engine semantics for the per-tag results — only the per-call
+header layout and the per-request descriptor layout change.
+
+`db_handle` is whatever `OCXcip_CreateTagDbHandle` returned for
+the target PLC; every `bp_tagdb_t` has cached this since v0.6.0.
+
+```
+fn_name        = "OCXcip_AccessTagDataDb"
+payload_size   = 0x1B0 + (request_count - 1) × 0x128 + total_data_bytes
+
+REQUEST PAYLOAD:
+  slot + 0x78   uint32   db_handle           from CreateTagDbHandle
+  slot + 0x7C   uint8    has_extra           1 if engine should consume opt_value
+                                              and write back to it on reply.
+                                              SDKs ship 0 (see "opt_value semantics" below).
+  slot + 0x7D   uint8    (pad)
+  slot + 0x7E   uint16   opt_value           IN/OUT; semantics device-dependent.
+                                              SDKs ship 0 when has_extra == 0.
+  slot + 0x80   uint16   request_count       1..N
+  slot + 0x82   uint16   (pad)
+  slot + 0x84   uint32   (pad)
+
+  Per request, stride 0x128, first descriptor at slot + 0x88:
+    +0x000  char[255]  tag_name             NUL-terminated; +0x0FF stays 0
+    +0x100  uint16     action               1 = read, 2 = write
+    +0x102  uint16     (pad)
+    +0x104  uint32     data_type            CIP type code (widened from u16
+                                              relative to AccessTagData — but
+                                              the wire interpretation is the
+                                              same; CIP type codes always fit
+                                              in u16)
+    +0x108  uint32     elem_byte_size       bytes per element
+    +0x10C  uint32     elem_count           number of elements
+    +0x110  uint8      has_data             1 if mask_seed is meaningful.
+                                              SDKs ship 0 (the engine reads
+                                              from the slot data area when
+                                              has_data == 0 — exactly the
+                                              same code path AccessTagData
+                                              exercises).
+    +0x111  uint8[7]   (pad)
+    +0x118  uint64     mask_seed            first 1/2/4/8 bytes of element 0
+                                              zero-extended to u64.  Used by
+                                              the engine when has_data == 1 to
+                                              short-circuit BIT-class write
+                                              masks.  SDKs ship 0.
+    +0x120  uint32     result               server-written: CIP general status
+    +0x124  uint32     (pad)
+
+  DATA AREA starts at: slot + 0x1B0 + (request_count - 1) × 0x128
+                       (i.e. immediately after the last descriptor; same
+                       packing model as AccessTagData)
+
+    For each request in order:
+      - For ActionWrite: caller writes elem_count × elem_byte_size bytes here
+      - For ActionRead:  server writes elem_count × elem_byte_size bytes here
+
+  Engine validates payload_size <= 0x4B000; over -> -311 (slot too large),
+  identical to AccessTagData.
+
+RESPONSE PAYLOAD:
+  Same slot; engine populates each descriptor's `result` field at
+  +0x120 and writes per-request bytes into the data area for reads.
+  When has_extra == 1, slot + 0x7E also has the engine's writeback
+  to opt_value.
+```
+
+### Differences from `OCXcip_AccessTagData`
+
+| Aspect | AccessTagData | AccessTagDataDb |
+|---|---|---|
+| slot + 0x78 routing target | char[255] path string | uint32 db_handle |
+| extra header field at +0x7C | n/a (descriptors start at +0x180) | has_extra + opt_value, descriptors at +0x88 |
+| per-descriptor stride | 0x120 | 0x128 (+8) |
+| action offset within descriptor | +0x104 (u16) | +0x100 (u16) |
+| data_type / elem_byte_size / elem_count | u16 @ +0x100/+0x102/+0x106 | u32 @ +0x104/+0x108/+0x10C |
+| `has_extra` / `data_ptr` / `result` (per-desc) | +0x108 / +0x110 / +0x118 | (has_data at +0x110, mask_seed at +0x118, result at +0x120) |
+| `data_area_start` for count = 1 | 0x2A0 | 0x1B0 |
+
+An encoder for the new opcode is **not** a +8 offset of the
+AccessTagData encoder — the descriptor field offsets and widths
+are reorganized.
+
+### `mask_seed` field semantics
+
+The OEM wrapper's helper at `libocxbpapi-w.so:0x10CF40`
+(`_Z9GetWrMaskjPv` = `GetWrMask(uint type, void *data)`) extracts
+the first 1/2/4/8 bytes of the caller's data pointer and returns
+them zero-extended to u64.  The wrapper writes this into the
+descriptor's `+0x118` only when the user passed a non-NULL data
+pointer (which the wrapper signals to the engine via has_data = 1).
+Used by the engine as a fast-path mask for BIT-class write services.
+
+This SDK always stages data inline in the slot's data area and
+never passes userspace data pointers, mirroring `OCXcip_AccessTagData`.
+Setting `has_data = 0` + `mask_seed = 0` exercises the same engine
+code path AccessTagData uses, validated empirically against the
+L85 (see docs/access-tag-data-db.md "Verification gate").
+
+### `opt_value` field semantics
+
+The OEM wrapper at `libocxbpapi-w.so:0x10DEE0` accepts a 5th
+parameter that is an in/out `uint16_t *`.  When non-NULL, the
+wrapper sets `has_extra = 1`, copies `*opt_inout` into
+`slot+0x7E` on the request, and copies `slot+0x7E` back to
+`*opt_inout` on the reply.  When NULL, both header bytes stay 0.
+
+The engine's use of this field is opaque from our side of the
+wire — the host-side wrapper just shuttles it.  This SDK ships
+the `has_extra = 0` path until a real consumer needs it; the
+engine has consistently accepted that on the cm1756 / L85.
+
+### RE source
+
+Wire layout RE'd from `libocxbpapi-w.so:0x10DEE0`
+(`OCXcip_AccessTagDataDb`) plus the cross-check against the
+existing `OCXcip_AccessTagData` decompile.  Per-byte trace and
+hypothesis testing in `docs/access-tag-data-db.md`.
+
 ## Why `has_extra = 0`
 
 The vendor wrapper has an "extra path" mode where the
@@ -1061,6 +1185,13 @@ secondary string at the end of the descriptor. We never use it —
 setting `has_extra = 1` with a non-NUL extra path crashes the engine
 on cm1756 (PROBE: SIGSEGV in libocxbpeng during marshalling). Always
 set it to 0 and use the slot-level path field.
+
+Note: the AccessTagDataDb opcode (v0.10.4+) reuses the
+`has_extra` byte at a DIFFERENT location (slot + 0x7C, not the
+per-descriptor `has_extra` at +0x108 of AccessTagData's
+descriptor) with a different semantic — see that opcode's
+section above.  The two fields are unrelated despite sharing a
+name.
 
 ## The slot header's `is_docker` byte
 

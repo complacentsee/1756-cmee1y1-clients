@@ -1105,10 +1105,26 @@ typedef struct {
 /* bp_tagdb_access
  *   Performs one OCXcip_AccessTagData call with `count` requests.
  *   The slot-level errorcode is the return value; per-request
- *   results are in each entry's `result` field. */
+ *   results are in each entry's `result` field.
+ *
+ *   For new code prefer bp_tagdb_access_db (v0.10.4+) — it uses the
+ *   cached db_handle from CreateTagDbHandle instead of re-sending the
+ *   path string, saving ~251 bytes of wire and the engine-side path
+ *   parse per call.  Behavior is otherwise identical. */
 int  bp_tagdb_access(bp_tagdb_t *db,
                      bp_tag_request_t *requests,
                      size_t count);
+
+/* bp_tagdb_access_db  (v0.10.4+)
+ *   Same shape as bp_tagdb_access but dispatches OCXcip_AccessTagDataDb.
+ *   Uses the db's cached handle (from bp_tagdb_open / CreateTagDbHandle)
+ *   instead of the path string, eliminating per-call path marshalling
+ *   and the engine-side path parse.  Per-request `result` fields are
+ *   populated with the CIP General Status exactly as bp_tagdb_access
+ *   would; rc is the slot-level engine code. */
+int  bp_tagdb_access_db(bp_tagdb_t *db,
+                        bp_tag_request_t *requests,
+                        size_t count);
 
 /* ============================================================
  * Convenience helpers — single-tag scalar read/write

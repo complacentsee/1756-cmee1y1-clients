@@ -56,6 +56,38 @@
 #define BP_REQ_DATA_PTR_OFF       0x110u  /* uint64 — unused */
 #define BP_REQ_RESULT_OFF         0x118u  /* uint32 — server-written */
 
+/* ----- AccessTagDataDb layout (v0.10.4) — peer of AccessTagData
+ * that uses the cached db_handle from CreateTagDbHandle instead of
+ * re-sending the path string per call.  Saves ~251 bytes of path
+ * marshalling and the engine-side path parse per call.  See
+ * docs/access-tag-data-db.md for the RE trace and docs/protocol.md
+ * for the canonical wire layout. */
+#define BP_TAGDATA_DB_HANDLE_OFF    0x78u   /* uint32 db_handle */
+#define BP_TAGDATA_DB_HAS_EXTRA_OFF 0x7Cu   /* uint8  has_extra (we ship 0) */
+#define BP_TAGDATA_DB_OPT_VALUE_OFF 0x7Eu   /* uint16 opt_value (we ship 0) */
+#define BP_TAGDATA_DB_COUNT_OFF     0x80u   /* uint16 request count */
+#define BP_TAGDATA_DB_REQ0_START    0x88u   /* first request descriptor */
+#define BP_TAGDATA_DB_REQ_STRIDE    0x128u  /* bytes per descriptor */
+#define BP_TAGDATA_DB_DATA_AREA0    0x1B0u  /* data area start when count == 1
+                                              * (general form: DATA_AREA0 +
+                                              *  (count-1) * REQ_STRIDE) */
+
+/* Within an AccessTagDataDb request descriptor (relative to descriptor
+ * start).  Field offsets and widths DIFFER from AccessTagData: action
+ * moves to +0x100, the small ints widen to u32, has_data sits at +0x110
+ * (u8), mask_seed at +0x118 (u64), and result moves to +0x120 (u32). */
+#define BP_REQDB_TAGNAME_OFF         0x000u  /* char[255] + NUL terminator */
+#define BP_REQDB_ACTION_OFF          0x100u  /* uint16  1=read 2=write */
+#define BP_REQDB_DATATYPE_OFF        0x104u  /* uint32  (widened from u16) */
+#define BP_REQDB_ELEM_BYTE_SIZE_OFF  0x108u  /* uint32  (widened from u16) */
+#define BP_REQDB_ELEM_COUNT_OFF      0x10Cu  /* uint32  (widened from u16) */
+#define BP_REQDB_HAS_DATA_OFF        0x110u  /* uint8 — we ship 0 (no
+                                              * caller-provided data ptr) */
+#define BP_REQDB_MASK_SEED_OFF       0x118u  /* uint64 — we ship 0; only
+                                              * used by the engine when
+                                              * has_data == 1 */
+#define BP_REQDB_RESULT_OFF          0x120u  /* uint32 — server-written */
+
 /* ----- Symbol-info descriptor offsets (within the 128-byte struct) ----- */
 #define BP_SYM_NAME_OFF        0x00u   /* char[100] NUL-terminated */
 #define BP_SYM_DATATYPE_OFF    0x64u   /* uint16 */
