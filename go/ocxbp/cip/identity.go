@@ -54,19 +54,27 @@ func DecodeGetDeviceId(slot []byte) IDObject {
 	return decodeID(slot[0x178:])
 }
 
-// EncodeGetDeviceIdStatus mirrors EncodeGetDeviceId — same request
-// layout (path + instance) since the engine differentiates only by
-// fn_name + payload_size.
+// EncodeGetDeviceIdStatus writes the path at +0x78, clears the output
+// slot at +0x178, and writes the instance at +0x17A.  Matches the
+// OEM wrapper at libocxbpapi-w.so:0x108620 which explicitly clears
+// +0x178 before dispatch (without the clear the engine appears to
+// leave +0x178 holding residual data).
 func EncodeGetDeviceIdStatus(slot []byte, path string, instance uint16) {
-	EncodeGetDeviceId(slot, path, instance)
+	n := len(path)
+	if n > 254 {
+		n = 254
+	}
+	copy(slot[HdrPayloadStart:HdrPayloadStart+n], path)
+	binary.LittleEndian.PutUint16(slot[0x178:], 0)
+	binary.LittleEndian.PutUint16(slot[0x17A:], instance)
 }
 
-// DecodeGetDeviceIdStatus reads the 16-bit status response.  RE'd
-// against the live engine — the response is written at the standard
-// payload-start offset (+0x78), overwriting the consumed input path
-// text.
+// DecodeGetDeviceIdStatus reads the 16-bit status response at +0x178.
+// Decompile of OCXcip_GetDeviceIdStatus @ 0x108620 confirms:
+// `*param_3 = puStack_8[0xbc]` where puStack_8 is undefined2*, so
+// index 0xbc = byte offset 0x178.
 func DecodeGetDeviceIdStatus(slot []byte) uint16 {
-	return binary.LittleEndian.Uint16(slot[HdrPayloadStart:])
+	return binary.LittleEndian.Uint16(slot[0x178:])
 }
 
 // DecodeGetActiveNodes returns (lo, hi) 32-bit halves of the

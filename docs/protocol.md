@@ -222,7 +222,10 @@ payload_size   = 0x180
 
 REQUEST PAYLOAD:
   slot + 0x078  char[255]  text_path        NUL-terminated, max 254 bytes
-  slot + 0x178  uint16     instance         normally 1
+  slot + 0x17A  uint16     instance         normally 1
+                                              NOTE: NOT +0x178 (that's the
+                                              engine's output slot — wrapper
+                                              clears it before dispatch).
 
 RESPONSE PAYLOAD:
   slot + 0x178  uint16     status           bits 0..3 reserved, bits 4..7
@@ -232,23 +235,26 @@ RESPONSE PAYLOAD:
 
 Returns just the 16-bit Identity status word — cheaper than
 `GetDeviceIdObject` (48-byte Identity struct) when callers only need
-the heartbeat or run-program nibble.  Request layout is identical to
-`GetDeviceIdObject` (path + instance); the engine differentiates by
-fn_name and payload_size.  Response overlaps the input instance
-field at slot+0x178 once the engine has consumed the input.
+the heartbeat or run-program nibble.
 
-Wire signature confirmed via sibling
-`tools/phase2_plc_mode.py` ctypes binding (`OCXcip_GetDeviceIdStatus`
-takes `(uint32 reserved, char* path, uint16* out_status, uint16
-instance)`).
+Wire format confirmed via Ghidra decompile of
+`OCXcip_GetDeviceIdStatus @ 0x108620` —
+the slot pointer in the wrapper is `undefined2 *` (uint16 indices),
+and the relevant operations are:
+- `puStack_8[0xbc] = 0` clears slot+0x178 (output)
+- `puStack_8[0xbd] = param_4` writes instance to slot+0x17A
+- `*param_3 = puStack_8[0xbc]` reads back from slot+0x178 (status)
 
-> **Caveat (v0.10.0)**: The response offset above is our current best
-> guess; live testing against the cm1756 shows the engine accepts the
-> dispatch (`rc=0`) but writes the status word at an offset we
-> haven't located in the slot (read attempts at `+0x178`, `+0x180`,
-> and `+0x78` all returned either consumed-input bytes or zero).
-> The public API is shape-correct; full RE of `libocxbpapi-w.so`
-> response marshalling is a v0.10.x followup.
+> **cm1756 divergence**: empirically the cm1756 `bpServer` returns
+> `rc=0` for `OCXcip_GetDeviceIdStatus` but leaves slot+0x178 holding
+> residual bytes (looks like fragments of the input path text), not
+> the expected status word.  The OEM library's `libocxbpapi-w.so`
+> expects the response at `+0x178` per the wrapper code, so this is
+> a server-side quirk of this image rather than an SDK marshalling
+> bug.  Callers needing reliable Identity status on cm1756 should
+> fall back to `bp_client_get_device_id().status` (the full Identity
+> object's status field at the same offset within the Identity
+> struct) until the bpServer behavior is RE'd separately.
 
 ### `OCXcip_ParsePath` — text path → encoded EPATH (v0.10.0+ public; earlier diagnostic)
 
@@ -281,18 +287,26 @@ diagnostic-only path to the public
 helpers, plus a typed `bp_parsed_path_t` / `ocxbp.ParsedPath` /
 `bpclient.ParsedPath` result struct.
 
-> **Caveat (v0.10.0)**: The response field offsets above are
-> inherited from the original `pathprobe` diagnostic and have
-> not been fully re-verified.  Empirically against the live
-> cm1756, a simple "P:1,S:2" input returns `rc=0` + nonzero
-> parsed metadata BUT `encoded_size=0` and `seg_flags`/`attr_flags`
-> bytes that look like residual input characters.  The dispatch
-> path is functional; the response decode may need RE refinement
-> in a future patch (track separately).  Callers needing
-> guaranteed-correct encoded EPATH bytes should build them by
-> hand from the class/instance fields or fall back to
-> hand-rolling the EPATH per the CIP standard until the response
-> layout is fully characterized.
+Wire format reconfirmed against Ghidra decompile of
+`OCXcip_ParsePath @ 0x1094f0` — slot pointer is `undefined2 *`
+(uint16-indexed), and the wrapper:
+- writes path text at `slot+0x78` (`func_0x00104530(puStack_8 + 0x3c, param_2, 0xff)`)
+- writes caller cap at `slot+0x280` (`puStack_8[0x140] = min(*param_7, 256)`)
+- reads `puStack_8[0xbc]` = `+0x178` → `out_class`
+- reads `puStack_8[0xbd]` = `+0x17A` → `out_segment_flags`
+- reads `puStack_8[0xbe]` = `+0x17C` → `out_instance`
+- copies `puStack_8 + 0xc0..` = `+0x180..` → `out_encoded_path`
+- reads `puStack_8[0x140]` = `+0x280` → encoded byte count
+
+> **Note** (v0.10.0): OldI port/slot paths like `P:1,S:2`
+> return `rc=0` with `encoded_size=0` — the engine maps the routing
+> semantics directly into `out_class` / `out_instance` (e.g.
+> `class=1, instance=2` for "P:1,S:2") and does not produce a
+> separate encoded EPATH byte sequence for those inputs.  The
+> `seg_flags` / `attr_flags` bytes for such paths surface as
+> apparently-residual ASCII characters from the input text;
+> they are not meaningful flags.  This is engine behavior, not
+> an SDK bug.
 
 ### `OCXcip_ErrorString` — engine-owned rc → ASCII description (v0.10.0+)
 

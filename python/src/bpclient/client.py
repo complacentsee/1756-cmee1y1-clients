@@ -341,14 +341,17 @@ class Client:
         def fill(slot):
             slot[P.HDR_PAYLOAD_START:P.HDR_PAYLOAD_START + len(path_bytes)] = path_bytes
             slot[P.HDR_PAYLOAD_START + len(path_bytes)] = 0
-            struct.pack_into("<H", slot, 0x178, instance)
+            # OEM wrapper clears +0x178 (output slot) before writing
+            # the instance at +0x17A; without the clear the engine
+            # appears to leave +0x178 holding residual data.
+            struct.pack_into("<H", slot, 0x178, 0)
+            struct.pack_into("<H", slot, 0x17A, instance)
 
         def read(slot):
             nonlocal out_status
-            # +0x78 is the standard payload-start offset; the engine
-            # overwrites the consumed input path text with the 16-bit
-            # status response here.
-            out_status = struct.unpack_from("<H", slot, P.HDR_PAYLOAD_START)[0]
+            # Response status at +0x178 — confirmed via Ghidra
+            # decompile of OCXcip_GetDeviceIdStatus @ 0x108620.
+            out_status = struct.unpack_from("<H", slot, 0x178)[0]
 
         self._raw.call("OCXcip_GetDeviceIdStatus", 0x180,
                        fill=fill, read=read, timeout_ms=5000)

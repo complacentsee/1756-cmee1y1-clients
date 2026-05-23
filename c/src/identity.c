@@ -121,17 +121,22 @@ static void gids_fill(uint8_t *slot, void *user) {
     if (n > 254) n = 254;
     memcpy(slot + 0x78, c->path, n);
     *(slot + 0x78 + n) = 0;
-    bp_st_u16(slot + 0x178, c->instance);
+    /* OEM wrapper at libocxbpapi-w.so:0x108620 explicitly clears
+     * +0x178 (the output slot) before dispatch and then writes the
+     * instance at +0x17A.  Without the clear, the engine seems to
+     * leave +0x178 containing residual data — our earlier attempts
+     * read junk because the slot wasn't reset. */
+    bp_st_u16(slot + 0x178, 0);
+    bp_st_u16(slot + 0x17A, c->instance);
 }
 
 static void gids_read(uint8_t *slot, void *user) {
     gids_ctx_t *c = user;
-    /* RE'd against the live engine — the engine overwrites the input
-     * path text with the 16-bit status response starting at the
-     * standard payload-start offset (+0x78).  Earlier attempts at
-     * +0x178 (= consumed instance field) and +0x180 (= Identity
-     * status-field offset) both returned wrong data. */
-    c->out_status = bp_ld_u16(slot + 0x78);
+    /* Response status word at +0x178; instance was at +0x17A so
+     * +0x178 is dedicated output (decompile of OCXcip_GetDeviceIdStatus
+     * @ 0x108620 confirms: `*param_3 = puStack_8[0xbc]` where
+     * puStack_8 is undefined2* so index 0xbc = byte offset 0x178). */
+    c->out_status = bp_ld_u16(slot + 0x178);
 }
 
 int bp_client_get_device_id_status(bp_client_t *cl, const char *path,
