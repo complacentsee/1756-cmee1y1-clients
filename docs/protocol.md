@@ -214,6 +214,37 @@ The SDK's `bp_client_close` / `Client.Close()` / `client.close()`
 methods call this automatically.  Wire address in the OEM library:
 `OCXcip_Close` at `0x0010ACF4` (RE'd from `libocxbpapi-w.so`).
 
+### `OCXcip_ErrorString` — engine-owned rc → ASCII description (v0.10.0+)
+
+```
+fn_name        = "OCXcip_ErrorString"
+payload_size   = 0xD0
+
+REQUEST PAYLOAD:
+  slot + 0x78  int32    code              the rc to translate
+
+RESPONSE PAYLOAD:
+  slot + 0x7C  char[78] description       NUL-padded ASCII
+```
+
+Input + output overlap on adjacent bytes (0x78 + 4 = 0x7C); the
+engine reads the 4-byte input first and overwrites the buffer with
+the 78-byte string before returning.  Confirmed empirically — an
+earlier attempt to put the input at `+0x50` returned "Successful"
+for every code regardless.
+
+The engine owns a static string table indexed by `code`.  Useful for
+surfacing engine-internal codes the SDK's hardcoded
+`bp_strerror` doesn't cover (positive engine codes, undocumented
+negative codes, etc.).
+
+Wire-format RE'd from `libocxbpapi-w.so.3:0x0010A600` — see sibling
+`docs/libocxbpapi-w.md §4.2`.
+
+SDK helpers: `bp_client_error_string` (C), `Client.ErrorString` (Go),
+`client.error_string` (Python).  Each returns the empty string if
+the engine has no entry for `code`.
+
 ### `OCXcip_CreateTagDbHandle` — get a per-PLC tag DB handle
 
 ```

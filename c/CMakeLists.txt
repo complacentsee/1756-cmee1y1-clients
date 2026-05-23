@@ -137,6 +137,11 @@ target_link_libraries(symcache PRIVATE bpclient pthread rt)
 add_executable(multitagtest examples/multitagtest.c)
 target_link_libraries(multitagtest PRIVATE bpclient pthread rt)
 
+# Example: errstr — v0.10.0 OCXcip_ErrorString validator
+# (compares engine-owned strings vs SDK's local bp_strerror).
+add_executable(errstr examples/errstr.c)
+target_link_libraries(errstr PRIVATE bpclient pthread rt)
+
 # Example: udtinfo — dump a UDT's full schema using the public API
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
@@ -169,5 +174,6 @@ install(TARGETS
             routedident
             symcache
             multitagtest
+            errstr
             udtinfo
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

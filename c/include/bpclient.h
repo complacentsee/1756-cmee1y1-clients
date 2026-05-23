@@ -99,6 +99,21 @@ int bp_client_last_cip_error(bp_client_t *client, bp_cip_status_t *out);
  *   docs/error-codes.md "Forward_Open / Forward_Close failure modes". */
 const char *bp_cip_status_string(uint8_t status, uint16_t ext_status);
 
+/* bp_client_error_string  (v0.10.0+)
+ *   Dispatches OCXcip_ErrorString to fetch the engine-owned ASCII
+ *   description for an arbitrary error code.  Complements bp_strerror
+ *   (which only knows our hardcoded BP_ERR_* set) — useful for
+ *   surfacing engine-internal codes we haven't characterized.
+ *
+ *   `code` is the integer rc you want translated (can be any value
+ *   the engine produces — positive engine codes, negative OCX_ERR_*,
+ *   or unknown values).  `out` must be at least 79 bytes; the engine
+ *   returns up to 78 ASCII bytes plus the SDK appends a NUL terminator.
+ *
+ *   Returns BP_OK and writes the string into *out on success; the
+ *   string is empty if the engine has no entry for `code`. */
+int bp_client_error_string(bp_client_t *client, int32_t code, char out[79]);
+
 /* ============================================================
  * CIP atomic type codes (low 13 bits of data_type field)
  * ============================================================ */

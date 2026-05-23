@@ -130,6 +130,32 @@ class Client:
         SDK's IPC handle alive across multiple sessions."""
         self._raw.call("OCXcip_Close", 0x78, timeout_ms=5000)
 
+    def error_string(self, code: int) -> str:
+        """OCXcip_ErrorString: fetch the engine-owned ASCII description
+        for an arbitrary error code (positive engine codes, negative
+        OCX_ERR_*, or unknown values).  Complements ``strerror``
+        (which only knows hardcoded BP_ERR_* values).
+
+        Wire: payload 0xD0, code at slot+0x78, 78-byte ASCII at
+        slot+0x7C..+0xC8.  Returns empty string if the engine has
+        no entry for ``code``."""
+        out = ""
+
+        def fill(slot):
+            struct.pack_into("<i", slot, P.HDR_PAYLOAD_START, code)
+
+        def read(slot):
+            nonlocal out
+            buf = bytes(slot[0x7C:0x7C + 78])
+            n = buf.find(b"\x00")
+            if n < 0:
+                n = len(buf)
+            out = buf[:n].decode("ascii", "replace")
+
+        self._raw.call("OCXcip_ErrorString", 0xD0,
+                       fill=fill, read=read, timeout_ms=5000)
+        return out
+
     # ============================================================
     # Tag-DB lifecycle
     # ============================================================

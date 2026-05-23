@@ -1,9 +1,13 @@
 /*
- * errors.c — bp_strerror() + bp_cip_status_string().
+ * errors.c — bp_strerror() + bp_cip_status_string() +
+ *            bp_client_error_string() (v0.10.0+).
  *
  * SPDX-License-Identifier: MIT
  */
+#include <string.h>
+
 #include "../include/bpclient.h"
+#include "proto.h"
 
 const char *bp_strerror(int rc) {
     switch (rc) {
@@ -96,4 +100,50 @@ const char *bp_cip_status_string(uint8_t status, uint16_t ext_status) {
     case 0x29: return "member not settable";
     default:   return "unknown CIP status";
     }
+}
+
+/* ============================================================
+ * OCXcip_ErrorString — fetch engine-owned description for any rc
+ *
+ * Wire format (RE'd from libocxbpapi-w.so.3:0x0010A600 — see
+ * sibling docs/libocxbpapi-w.md §4.2 + §5; input offset corrected
+ * from a wire-test pass against the live cm1756 — server was
+ * returning "Successful" for every code at +0x50, indicating the
+ * actual input slot is the standard payload area at +0x78):
+ *   payload_size = 0xD0
+ *   REQUEST:  int32 code at slot + 0x78
+ *   RESPONSE: 78-byte ASCII string at slot + 0x7C..+0xC8
+ * ============================================================ */
+typedef struct {
+    int32_t code;
+    char   *out;     /* caller-provided, >= 79 bytes */
+} es_ctx_t;
+
+static void es_fill(uint8_t *slot, void *user) {
+    es_ctx_t *c = user;
+    bp_st_u32(slot + BP_HDR_PAYLOAD_START, (uint32_t)c->code);
+}
+
+static void es_read(uint8_t *slot, void *user) {
+    es_ctx_t *c = user;
+    const uint8_t *p = slot + 0x7C;
+    size_t n = 0;
+    while (n < 78 && p[n] != 0) n++;
+    memcpy(c->out, p, n);
+    c->out[n] = 0;
+}
+
+int bp_client_error_string(bp_client_t *cl, int32_t code, char out[79]) {
+    if (!cl || !out) return BP_ERR_NULL_ARG;
+    out[0] = 0;
+    es_ctx_t ctx = { .code = code, .out = out };
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_ErrorString",
+        .payload_size = 0xD0,
+        .fill_payload = es_fill,
+        .read_reply   = es_read,
+        .timeout_ms   = 5000,
+        .user         = &ctx,
+    };
+    return bp_client_call(cl, &spec);
 }

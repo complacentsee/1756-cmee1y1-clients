@@ -10,9 +10,11 @@
 package ocxbp
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
+	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/cip"
 	"github.com/complacentsee/1756-cmee1y1-clients/go/ocxbp/shm"
 )
 
@@ -222,6 +224,37 @@ func CIPStatusString(status uint8, ext uint16) string {
 		return "member not settable"
 	}
 	return "unknown CIP status"
+}
+
+// ErrorString dispatches OCXcip_ErrorString to fetch the engine-owned
+// description for an arbitrary error code (positive engine codes,
+// negative OCX_ERR_*, or unknown values).  Complements Strerror
+// (which only knows the hardcoded BP_ERR_* set).  Returns an empty
+// string if the engine has no entry for `code`.
+//
+// Wire: payload 0xD0, code at slot+0x78, 78-byte ASCII at slot+0x7C.
+func (c *Client) ErrorString(code int32) (string, error) {
+	if c == nil {
+		return "", ErrNullArg
+	}
+	var out string
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnErrorString,
+		PayloadSize: cip.SizeErrorString,
+		Fill: func(slot []byte) {
+			binary.LittleEndian.PutUint32(slot[shm.HdrPayloadStart:], uint32(code))
+		},
+		Read: func(slot []byte) {
+			b := slot[0x7C : 0x7C+78]
+			n := 0
+			for n < len(b) && b[n] != 0 {
+				n++
+			}
+			out = string(b[:n])
+		},
+		TimeoutMs: 5000,
+	})
+	return out, translateCallErr(err)
 }
 
 // translateCallErr maps shm-layer errors to the public sentinels +
