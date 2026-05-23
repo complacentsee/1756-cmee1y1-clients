@@ -202,6 +202,16 @@ int  bp_client_open_session(bp_client_t *client, uint32_t *out_handle);
  *   across multiple sessions on the same process. */
 int  bp_client_close_session(bp_client_t *client);
 
+/* bp_client_dummy  (v0.10.3+)
+ *   Dispatches OCXcip_Dummy — a no-op server roundtrip.  Useful as
+ *   a lightweight liveness probe (cheaper than OpenSession because
+ *   it doesn't allocate any engine-side state).
+ *
+ *   Wire: opcode 0xCA, fn_name "OCXcip_Dummy", payload_size 0x78
+ *   (bare slot header, no body).  Returns BP_OK on success;
+ *   negative rc on transport / system errors. */
+int bp_client_dummy(bp_client_t *client);
+
 /* bp_client_reconnect  (v0.10.0+)
  *   Re-establishes the IPC handle after a bpServer restart.  Mirrors
  *   the OEM `ReconnectClient` at libocxbpapi-w.so:0x107e00 — closes
@@ -394,6 +404,40 @@ int64_t bp_wctime_to_unix_us(const bp_wctime_t *wc, bp_wctime_epoch_t epoch);
  *   aux0..3 contain different structured data and this function
  *   will return garbage. */
 size_t bp_wctime_tz_name(const bp_wctime_t *wc, char *out, size_t out_size);
+
+/* bp_wctime_local_t — PROVISIONAL broken-down LOCAL fields from
+ * aux2 (v0.10.3+).
+ *
+ * Observed empirically on the L85's GetWCTime response: aux2 packs
+ * four little-endian 16-bit values in (day, hour, minute, second)
+ * order.  Example: aux2 = 0x0038003400130016 →
+ *   bytes LE = 16 00 13 00 34 00 38 00
+ *   day = 0x0016 = 22,  hour = 0x0013 = 19,
+ *   minute = 0x0034 = 52, second = 0x0038 = 56.
+ *
+ * STATUS: aux2 layout confirmed on two PLC families (L73 + L85)
+ * with timestamps validated against the sec-derived UTC second-for-
+ * second.  Trustable for day/hour/min/sec extraction from LOCAL
+ * GetWCTime responses.
+ *
+ * Sibling fields aux0/aux1/aux3 are NOT decoded here because their
+ * semantics aren't fully understood yet (year field at aux1 bytes
+ * 2..3 reads as `2026` on L85 but `1998` on L73, so the layout
+ * probably involves a per-PLC offset we haven't characterized).
+ * See docs/protocol.md "Wall-clock" for the per-byte observations. */
+typedef struct {
+    uint16_t day;       /* 1..31 — aux2 LE uint16 #0 */
+    uint16_t hour;      /* 0..23 — aux2 LE uint16 #1 */
+    uint16_t minute;    /* 0..59 — aux2 LE uint16 #2 */
+    uint16_t second;    /* 0..59 — aux2 LE uint16 #3 */
+} bp_wctime_local_t;
+
+/* bp_wctime_decode_local
+ *   Extracts the broken-down LOCAL fields from wc->aux2 into *out.
+ *   No bounds check is performed (the fields are returned as the PLC
+ *   provided them).  Returns BP_OK + populates *out; returns
+ *   BP_ERR_NULL_ARG if either argument is NULL. */
+int bp_wctime_decode_local(const bp_wctime_t *wc, bp_wctime_local_t *out);
 
 /* bp_client_get_wctime / get_wctime_utc
  *   Reads the wall-clock object on the device addressed by text_path.

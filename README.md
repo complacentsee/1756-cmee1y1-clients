@@ -16,9 +16,9 @@ with the stock `bpServer` via its POSIX shared-memory IPC.
 
 | Language | Status | Source | Container |
 |---|---|---|---|
-| C        | shipped (v0.10.2) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
-| Go       | shipped (v0.10.2) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
-| Python   | shipped (v0.10.2) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
+| C        | shipped (v0.10.3) | [`c/`](c/) | `bpclient-c-tagtest:dev` |
+| Go       | shipped (v0.10.3) | [`go/`](go/) | `bpclient-go-tagtest:dev` |
+| Python   | shipped (v0.10.3) | [`python/`](python/) | `bpclient-python-tagtest:dev` |
 
 All three pass `tagtest`, the `msgprobe` slot-sweep (Identity
 Get_Attributes_All across slots 0..3 + the empty-slot rc=3 refusal),
@@ -40,7 +40,26 @@ missing from the cm1756 image.  Wire format in
 [`docs/protocol.md`](docs/protocol.md) "Connected messaging —
 wire format".
 
-**v0.10.0 (current)** adds OEM-parity utility + resilience opcodes,
+**v0.10.3 (current)** adds two further parity items on top of
+v0.10.2:
+
+- **`OCXcip_Dummy`** — bare-header server roundtrip exposed as
+  `bp_client_dummy` / `Client.Dummy` / `client.dummy`.  Cheap
+  (~50 µs) liveness probe that doesn't allocate engine state.
+  Ghidra-anchored at `libocxbpapi-w.so:0x10A180`.  Skipped during
+  this RE pass: `ServerError` (client-side log writer, not an RPC)
+  and `OCXcip_AccessTagDataDb` (alternate AccessTagData using a
+  db_handle; saves path-parse on the server but the existing
+  `bp_tagdb_access` already runs at 4000+ req/s, so the wire-layout
+  complexity isn't justified).
+- **WCTime LOCAL `aux2` decoder** (PROVISIONAL) — `bp_wctime_decode_local`
+  / `WCTime.DecodeLocal` / `WCTime.decode_local` extracts
+  `(day, hour, minute, second)` from `aux2` as four LE uint16s.
+  Validated against ONE L85 sample; `aux0` and `aux1` remain opaque
+  pending more samples.  Run any SDK's `wctime --raw` to capture
+  additional samples for refinement.
+
+**v0.10.0** adds OEM-parity utility + resilience opcodes,
 all wire-format-anchored against Ghidra decompiles of
 `libocxbpapi-w.so`:
 
@@ -410,6 +429,8 @@ Override the default `tagtest` entrypoint via Docker's
 | `multitagtest` | v0.9.0 read_tags + write_tags mixed-type batch round-trip with type validation |
 | `errstr`       | v0.10.0 OCXcip_ErrorString validator (sweep known + unknown rc codes) |
 | `idstatus`     | v0.10.0 OCXcip_GetDeviceIdStatus cross-check against full Identity |
+| `wctime`       | v0.10.0/v0.10.3 wall-clock validator across slots 1..3 (`--raw` dumps aux qwords) |
+| `dummy`        | v0.10.3 OCXcip_Dummy liveness-probe latency bench (N round-trips) |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |

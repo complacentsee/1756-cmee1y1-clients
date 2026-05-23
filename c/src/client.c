@@ -321,6 +321,23 @@ int bp_client_close_session(bp_client_t *c) {
     return bp_client_call(c, &spec);
 }
 
+/* bp_client_dummy — OCXcip_Dummy (libocxbpapi-w.so:0x10a180).
+ * Bare slot-header roundtrip — server reads no body, writes no body,
+ * just returns success.  Useful as a cheap liveness probe (~50 µs)
+ * that doesn't allocate engine state like OpenSession does. */
+int bp_client_dummy(bp_client_t *c) {
+    if (!c) return BP_ERR_NULL_ARG;
+    bp_call_spec_t spec = {
+        .fn_name      = "OCXcip_Dummy",
+        .payload_size = 0x78,
+        .fill_payload = NULL,
+        .read_reply   = NULL,
+        .timeout_ms   = 5000,
+        .user         = NULL,
+    };
+    return bp_client_call(c, &spec);
+}
+
 /* bp_client_reconnect — IPC restart after bpServer restart.  Mirrors
  * OEM ReconnectClient @ libocxbpapi-w.so:0x107e00 which does
  * comClient.Close() + sleep(50ms) + comClient.Open(). */

@@ -38,7 +38,7 @@ target_link_libraries(bpclient PRIVATE pthread rt)
 set_target_properties(bpclient PROPERTIES
     PUBLIC_HEADER include/bpclient.h
     SOVERSION 0
-    VERSION 0.10.2
+    VERSION 0.10.3
 )
 
 # Static library (same sources, different target)
@@ -158,6 +158,10 @@ target_link_libraries(wctime PRIVATE bpclient pthread rt)
 add_executable(udtinfo examples/udtinfo.c)
 target_link_libraries(udtinfo PRIVATE bpclient pthread rt)
 
+# Example: dummy — v0.10.3 OCXcip_Dummy liveness-probe validator
+add_executable(dummy examples/dummy.c)
+target_link_libraries(dummy PRIVATE bpclient pthread rt)
+
 # Install
 include(GNUInstallDirs)
 install(TARGETS bpclient
@@ -190,4 +194,5 @@ install(TARGETS
             idstatus
             wctime
             udtinfo
+            dummy
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

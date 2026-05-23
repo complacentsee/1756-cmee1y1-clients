@@ -30,7 +30,7 @@ from .errors import (
 )
 from ._route import build_unconnected_send, port_segment
 from .client import (
-    Client, ParsedPath, PoolSpec, WCTime,
+    Client, ParsedPath, PoolSpec, WCTime, WCTimeLocal,
     WCTIME_EPOCH_UNIX, WCTIME_EPOCH_1972,
     WCTIME_EPOCH_1998, WCTIME_EPOCH_2000,
 )
@@ -53,6 +53,7 @@ __all__ = [
     "PoolSpec",
     "ParsedPath",
     "WCTime",
+    "WCTimeLocal",
     "WCTIME_EPOCH_UNIX", "WCTIME_EPOCH_1972",
     "WCTIME_EPOCH_1998", "WCTIME_EPOCH_2000",
     "BpError",

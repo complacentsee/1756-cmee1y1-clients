@@ -18,6 +18,9 @@ const (
 	FnClose                  = "OCXcip_Close"
 	SizeClose         uint32 = 0x78
 
+	FnDummy                  = "OCXcip_Dummy"
+	SizeDummy         uint32 = 0x78
+
 	FnErrorString                  = "OCXcip_ErrorString"
 	SizeErrorString         uint32 = 0xD0
 

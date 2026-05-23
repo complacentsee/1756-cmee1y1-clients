@@ -150,6 +150,30 @@ func (wc WCTime) ToTime(epoch WCTimeEpoch) time.Time {
 	return time.Unix(us/1_000_000, (us%1_000_000)*1_000).UTC()
 }
 
+// WCTimeLocal is the broken-down LOCAL view of aux2 (v0.10.3+).
+// aux2 packs four LE uint16s in (day, hour, minute, second) order.
+// Confirmed across L73 + L85 — the decoded fields match the
+// sec-derived UTC second-for-second.  See bp_wctime_local_t in
+// the C SDK for the sibling-field caveats (aux0/aux1/aux3 are
+// not decoded; their semantics aren't fully understood).
+type WCTimeLocal struct {
+	Day    uint16 // 1..31 — aux2 LE uint16 #0
+	Hour   uint16 // 0..23 — aux2 LE uint16 #1
+	Minute uint16 // 0..59 — aux2 LE uint16 #2
+	Second uint16 // 0..59 — aux2 LE uint16 #3
+}
+
+// DecodeLocal extracts (day, hour, minute, second) from wc.Aux2.
+// Returns zero-valued WCTimeLocal if wc is the zero value.
+func (wc WCTime) DecodeLocal() WCTimeLocal {
+	return WCTimeLocal{
+		Day:    uint16(wc.Aux2 & 0xFFFF),
+		Hour:   uint16((wc.Aux2 >> 16) & 0xFFFF),
+		Minute: uint16((wc.Aux2 >> 32) & 0xFFFF),
+		Second: uint16((wc.Aux2 >> 48) & 0xFFFF),
+	}
+}
+
 // TZName extracts the NUL-terminated ASCII timezone-name string
 // from the four aux qwords (32 bytes, little-endian).  Only
 // meaningful when aux0..3 actually carry a TZ string (observed

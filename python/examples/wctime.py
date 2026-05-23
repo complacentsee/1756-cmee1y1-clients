@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""wctime — v0.10.2 Phase E live validator with epoch-aware decode.
+"""wctime — v0.10.3 Phase E/H live validator.
 
-Mirrors c/examples/wctime.c + go/cmd/wctime.
+Mirrors c/examples/wctime.c + go/cmd/wctime.  Pass --raw to also
+dump the six raw qwords (sec/nsec/aux0..3) per response.
 
 SPDX-License-Identifier: MIT
 """
 import sys
 
 import bpclient
+
+G_RAW = False
 
 
 def epoch_for(slot: int, is_utc: bool) -> int:
@@ -18,7 +21,7 @@ def epoch_for(slot: int, is_utc: bool) -> int:
 
 
 def print_wc(label: str, path: str, wc, rc: int,
-              epoch: int, try_tz: bool) -> bool:
+              epoch: int, try_tz: bool, try_local: bool) -> bool:
     if wc is None:
         print(f"[wctime] {label} {path}: rc={rc}")
         return False
@@ -26,10 +29,24 @@ def print_wc(label: str, path: str, wc, rc: int,
     ts = dt.strftime("%Y-%m-%dT%H:%M:%S")
     tz = wc.tz_name() if try_tz else ""
     print(f"[wctime] {label} {path}: {ts} UTC  tz=\"{tz}\"")
+    if try_local:
+        loc = wc.decode_local()
+        print(f"[wctime] {label} {path}: aux2-decoded local "
+              f"d={loc.day} h={loc.hour} m={loc.minute} s={loc.second}")
+    if G_RAW:
+        print(f"[wctime] {label} {path}: raw sec=0x{wc.sec:016x} "
+              f"nsec=0x{wc.nsec:016x}")
+        print(f"[wctime] {label} {path}: raw aux0=0x{wc.aux0:016x} "
+              f"aux1=0x{wc.aux1:016x}")
+        print(f"[wctime] {label} {path}: raw aux2=0x{wc.aux2:016x} "
+              f"aux3=0x{wc.aux3:016x}")
     return True
 
 
 def main() -> int:
+    global G_RAW
+    if "--raw" in sys.argv[1:]:
+        G_RAW = True
     try:
         c = bpclient.Client()
         c.open()
@@ -49,7 +66,8 @@ def main() -> int:
                 except Exception as e:
                     wc = None
                     rc = bpclient.err_code(e)
-                if print_wc(label, path, wc, rc, epoch_for(s, is_utc), is_utc):
+                if print_wc(label, path, wc, rc, epoch_for(s, is_utc),
+                             is_utc, not is_utc):
                     any_ok = True
         print(f"[wctime] {'PASS' if any_ok else 'FAIL'}")
         return 0 if any_ok else 1

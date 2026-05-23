@@ -157,6 +157,16 @@ int64_t bp_wctime_to_unix_us(const bp_wctime_t *wc, bp_wctime_epoch_t epoch) {
     return (int64_t)wc->sec + epoch_unix_seconds(epoch) * 1000000LL;
 }
 
+int bp_wctime_decode_local(const bp_wctime_t *wc, bp_wctime_local_t *out) {
+    if (!wc || !out) return BP_ERR_NULL_ARG;
+    /* aux2 packs (day, hour, minute, second) as 4 LE uint16s. */
+    out->day    = (uint16_t)( wc->aux2        & 0xFFFF);
+    out->hour   = (uint16_t)((wc->aux2 >> 16) & 0xFFFF);
+    out->minute = (uint16_t)((wc->aux2 >> 32) & 0xFFFF);
+    out->second = (uint16_t)((wc->aux2 >> 48) & 0xFFFF);
+    return BP_OK;
+}
+
 size_t bp_wctime_tz_name(const bp_wctime_t *wc, char *out, size_t out_size) {
     if (!wc || !out || out_size == 0) return 0;
     /* Read 32 bytes from aux0..aux3 in little-endian byte order

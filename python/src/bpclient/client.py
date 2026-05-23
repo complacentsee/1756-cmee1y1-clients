@@ -130,6 +130,15 @@ class Client:
         SDK's IPC handle alive across multiple sessions."""
         self._raw.call("OCXcip_Close", 0x78, timeout_ms=5000)
 
+    def dummy(self) -> None:
+        """OCXcip_Dummy (v0.10.3+): no-op server roundtrip.
+
+        Cheap liveness probe (~50 µs) that doesn't allocate any
+        engine-side state — useful when you want to confirm the
+        bpServer dispatcher is alive without committing a session
+        slot.  Wire: opcode 0xCA, payload_size 0x78, bare header."""
+        self._raw.call("OCXcip_Dummy", 0x78, timeout_ms=5000)
+
     def reconnect(self) -> None:
         """Re-establish IPC after a bpServer restart.
 
@@ -1150,6 +1159,36 @@ class WCTime:
         if n < 0:
             n = len(buf)
         return buf[:n].decode("ascii", "replace")
+
+    def decode_local(self) -> "WCTimeLocal":
+        """Decode (day, hour, minute, second) from aux2 (v0.10.3+).
+
+        aux2 packs four little-endian 16-bit values.  Confirmed
+        across two PLC families (L73 + L85): the decoded fields
+        match the sec-derived UTC second-for-second.
+
+        Sibling aux0/aux1/aux3 are NOT decoded here — their
+        semantics aren't fully understood yet (aux1's year-like
+        field reads `2026` on L85 but `1998` on L73, suggesting a
+        per-PLC offset we haven't characterized).  See
+        docs/protocol.md "Wall-clock" for the per-byte observations.
+        """
+        return WCTimeLocal(
+            day=(self.aux2) & 0xFFFF,
+            hour=(self.aux2 >> 16) & 0xFFFF,
+            minute=(self.aux2 >> 32) & 0xFFFF,
+            second=(self.aux2 >> 48) & 0xFFFF,
+        )
+
+
+@dataclass
+class WCTimeLocal:
+    """Broken-down LOCAL fields decoded from WCTime.aux2 (v0.10.3+).
+    See WCTime.decode_local() for caveats; this is provisional."""
+    day: int = 0      # 1..31
+    hour: int = 0     # 0..23
+    minute: int = 0   # 0..59
+    second: int = 0   # 0..59
 
 
 # Per-PLC epoch identifiers for WCTime.sec interpretation.  Empirical

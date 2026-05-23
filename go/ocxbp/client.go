@@ -179,6 +179,22 @@ func (c *Client) Reconnect() error {
 	return translateCallErr(c.shm.Reconnect())
 }
 
+// Dummy dispatches OCXcip_Dummy — a no-op server roundtrip.
+// Useful as a cheap liveness probe (~50 µs) that doesn't allocate
+// any engine-side state.  Mirrors C bp_client_dummy and Python
+// Client.dummy.
+func (c *Client) Dummy() error {
+	if c == nil {
+		return ErrNullArg
+	}
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnDummy,
+		PayloadSize: cip.SizeDummy,
+		TimeoutMs:   5000,
+	})
+	return translateCallErr(err)
+}
+
 // CloseSession dispatches OCXcip_Close to release the engine-side
 // session opened by OpenSession.  Client.Close calls this
 // automatically; explicit invocation is only needed if you want to

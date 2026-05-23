@@ -214,6 +214,30 @@ The SDK's `bp_client_close` / `Client.Close()` / `client.close()`
 methods call this automatically.  Wire address in the OEM library:
 `OCXcip_Close` at `0x0010ACF4` (RE'd from `libocxbpapi-w.so`).
 
+### `OCXcip_Dummy` — no-op server roundtrip (v0.10.3+)
+
+```
+fn_name        = "OCXcip_Dummy"
+payload_size   = 0x78
+
+REQUEST PAYLOAD:  (none — entire 0x78 bytes is the slot header)
+RESPONSE PAYLOAD: errorcode only
+```
+
+Cheap liveness probe — server reads nothing, writes nothing, just
+returns success.  Useful for confirming the bpServer dispatcher is
+alive without committing engine-side session state (unlike
+`OCXcip_Open` which allocates a session table entry).
+
+Wire format confirmed via Ghidra decompile of
+`OCXcip_Dummy @ 0x0010A180` (RE'd from `libocxbpapi-w.so`).  The
+wrapper writes only the standard slot header fields (`fn_name`
+string at +0x08, `payload_size` at +0x04, `localPid` / `localDocker`
+/ slot_index, and opcode `0xCA` at +0x00) — the rest of the slot is
+untouched.
+
+SDKs: `bp_client_dummy` / `Client.Dummy` / `client.dummy`.
+
 ### `OCXcip_GetDeviceIdStatus` — lightweight status-word probe (v0.10.0+)
 
 ```
@@ -327,9 +351,29 @@ semantics validated empirically against the cm1756 (v0.10.2,
     32 little-endian bytes spelling e.g.
     `"0 Pacific Time (US & Canada)"`.  Extracted with
     `bp_wctime_tz_name` / `WCTime.TZName` / `WCTime.tz_name`.
-  - **Opaque structured bits** (other variants): non-ASCII
-    metadata in an as-yet-unidentified layout (probably TZ offset
-    + DST flags + leap-second info).
+  - **Structured per-field metadata** (observed on `GetWCTime`
+    LOCAL): broken-down date/time + sub-second timestamp.  v0.10.3
+    ships a PROVISIONAL `aux2` decoder; `aux0`/`aux1` remain
+    opaque pending more samples.
+
+  Empirical `GetWCTime` LOCAL aux layout (`aux2` validated on two
+  PLC families on 2026-05-22; `aux0` / `aux1` / `aux3` still
+  partially understood — see notes per row):
+
+  | Qword | L73 sample (0x… LE)          | L85 sample (0x… LE)          | Notes |
+  |-------|------------------------------|------------------------------|-------|
+  | aux0  | `000323e043556f9d`           | `00065249bd3dbe80`           | High-resolution timestamp.  Magnitude ≈ 1.78 × 10¹⁵ on L85 → Unix nanoseconds yields ≈ 2026-05-20, right order of magnitude.  Exact unit not yet confirmed; could also be µs since some longer epoch. |
+  | aux1  | `0002000107ce0000`           | `0005000507ea0000`           | Bytes 2..3 = year-like (L85 = `0x07EA` = 2026 ✓; L73 = `0x07CE` = 1998 ✗ for 2026 date — likely a per-PLC offset).  Bytes 4..5 = month (L85 = `5` ✓, L73 = `1` ✓).  Byte 7 = day-of-week (L85 = `5` Fri ✓, L73 = `2` Tue ✓). |
+  | aux2  | `0023003b00010006`           | `0012002600140016`           | **Confirmed**: four LE uint16s in (day, hour, minute, second) order.  L73 = `(6, 1, 59, 35)` ✓ matches 2026-01-06 01:59:35; L85 = `(22, 20, 38, 18)` ✓ matches 2026-05-22 20:38:18. |
+  | aux3  | `0000000000000250`           | `000000000000019c`           | Looks like a small integer field; possibly TZ offset in minutes (L85 = `0x019c` = 412; the L85's PDT offset is 420 min — close but not exact).  Not yet characterized. |
+
+  v0.10.3 exposes the `aux2` decoder as `bp_wctime_decode_local` /
+  `WCTime.DecodeLocal` / `WCTime.decode_local`, returning a
+  `bp_wctime_local_t` / `WCTimeLocal` struct.  Status: `aux2`
+  confirmed across L73 + L85; `aux0`/`aux1`/`aux3` decoders not
+  shipped because the field semantics aren't certain.  Re-run
+  `wctime --raw` from any SDK to capture more samples and refine
+  the remaining fields.
 
 ### Extended device info / IP config (v0.10.0+)
 

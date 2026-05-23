@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bpclient"
-version = "0.10.2"
+version = "0.10.3"
 description = "Outbound CIP-over-bpServer SDK for the 1756-CMEE1Y1 EEC card"
 readme = "README.md"
 requires-python = ">=3.11"

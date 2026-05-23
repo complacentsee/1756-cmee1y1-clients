@@ -64,6 +64,10 @@ py runprobe.py --image bpclient-python-tagtest:dev tagtest
 | `routedident`  | v0.8.0 multi-hop Identity via Unconnected_Send (svc 0x52) + route_path |
 | `symcache`     | v0.9.0 symbol-cache validator (cold / warm / preload timing) |
 | `multitagtest` | v0.9.0 read_tags + write_tags mixed-type batch round-trip |
+| `errstr`       | v0.10.0 OCXcip_ErrorString sweep |
+| `idstatus`     | v0.10.0 OCXcip_GetDeviceIdStatus cross-check vs full Identity |
+| `wctime`       | v0.10.0/v0.10.3 wall-clock + epoch decode + `--raw` aux dump |
+| `dummy`        | v0.10.3 OCXcip_Dummy liveness-probe latency bench |
 | `pathprobe`    | `OCXcip_ParsePath` dispatch dump |
 | `actnodes`     | Active-node bitmap |
 | `modutil`      | Local switch / display / LED utilities |
