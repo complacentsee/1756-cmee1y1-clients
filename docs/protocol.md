@@ -214,6 +214,50 @@ The SDK's `bp_client_close` / `Client.Close()` / `client.close()`
 methods call this automatically.  Wire address in the OEM library:
 `OCXcip_Close` at `0x0010ACF4` (RE'd from `libocxbpapi-w.so`).
 
+### `OCXcip_ParsePath` — text path → encoded EPATH (v0.10.0+ public; earlier diagnostic)
+
+```
+fn_name        = "OCXcip_ParsePath"
+payload_size   = 0x288
+
+REQUEST PAYLOAD:
+  slot + 0x078  char[255]  text_path        NUL-terminated, max 254 bytes
+  slot + 0x280  uint16     encoded_capacity  caller's buffer cap (we pass 256)
+
+RESPONSE PAYLOAD:
+  slot + 0x178  uint16     class             parsed class word (0x20 if path
+                                              contained a class segment)
+  slot + 0x17A  uint8      seg_flags         0x01 if path contains a port seg
+  slot + 0x17C  uint32     instance          parsed instance number
+  slot + 0x180  uint8[]    encoded_path      binary EPATH bytes
+  slot + 0x280  uint16     encoded_size      byte count written into encoded_path
+  slot + 0x282  uint8      attr_flags        0x01 if path contains an attribute seg
+```
+
+OldI format only: `<letter>:<num>` segments joined by commas
+("P:1,S:2", "P:1,S:2,C:1,I:1,A:1", etc.).  Rockwell-style "1,2"
+notation is rejected with engine code -101 ("Bad path").
+
+Wire address: `libocxbpapi-w.so:0x1094f0` (RE'd via the legacy
+`pathprobe` diagnostic).  v0.10.0 promoted the dispatch from a
+diagnostic-only path to the public
+`bp_client_parse_path` / `Client.ParsePath` / `client.parse_path`
+helpers, plus a typed `bp_parsed_path_t` / `ocxbp.ParsedPath` /
+`bpclient.ParsedPath` result struct.
+
+> **Caveat (v0.10.0)**: The response field offsets above are
+> inherited from the original `pathprobe` diagnostic and have
+> not been fully re-verified.  Empirically against the live
+> cm1756, a simple "P:1,S:2" input returns `rc=0` + nonzero
+> parsed metadata BUT `encoded_size=0` and `seg_flags`/`attr_flags`
+> bytes that look like residual input characters.  The dispatch
+> path is functional; the response decode may need RE refinement
+> in a future patch (track separately).  Callers needing
+> guaranteed-correct encoded EPATH bytes should build them by
+> hand from the class/instance fields or fall back to
+> hand-rolling the EPATH per the CIP standard until the response
+> layout is fully characterized.
+
 ### `OCXcip_ErrorString` — engine-owned rc → ASCII description (v0.10.0+)
 
 ```

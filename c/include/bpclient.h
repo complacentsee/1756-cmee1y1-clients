@@ -115,6 +115,38 @@ const char *bp_cip_status_string(uint8_t status, uint16_t ext_status);
 int bp_client_error_string(bp_client_t *client, int32_t code, char out[79]);
 
 /* ============================================================
+ * OCXcip_ParsePath — text path → encoded EPATH (v0.10.0+)
+ *
+ * Encodes a textual CIP path (OldI format, "P:1,S:2,C:1,I:1,A:1"
+ * etc.) into the binary EPATH bytes that bp_client_message_send /
+ * bp_client_txrx_open expect.  Useful for validating path syntax
+ * at the SDK boundary instead of as a PLC-side CIP rejection.
+ *
+ * Wire format documented in docs/protocol.md "OCXcip_ParsePath".
+ * ============================================================ */
+
+typedef struct {
+    uint16_t encoded_size;        /* OUT: byte count in `encoded` (1..256) */
+    uint8_t  encoded[256];        /* OUT: binary EPATH */
+    uint16_t cip_class;           /* OUT: parsed class word (e.g. 0x20 + low byte
+                                   *      = class segment) */
+    uint8_t  segment_flags;       /* OUT: 0x01 if path contains a port segment, ... */
+    uint32_t instance;            /* OUT: parsed instance number */
+    uint8_t  attr_flags;          /* OUT: 0x01 if path contains an attribute segment */
+} bp_parsed_path_t;
+
+/* bp_client_parse_path
+ *   Dispatches OCXcip_ParsePath against `text` and fills *out with
+ *   the parsed result.  Returns BP_OK on success; engine code 0xFFFFFF9B
+ *   (-101) on malformed text path (e.g. "1,2" — Rockwell-style notation
+ *   that this engine rejects).
+ *
+ *   `text` must follow the OldI <letter>:<num> format joined with
+ *   commas.  Max input length is 254 bytes. */
+int bp_client_parse_path(bp_client_t *client, const char *text,
+                          bp_parsed_path_t *out);
+
+/* ============================================================
  * CIP atomic type codes (low 13 bits of data_type field)
  * ============================================================ */
 #define BP_TYPE_BOOL  0xC1

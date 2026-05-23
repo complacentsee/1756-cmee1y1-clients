@@ -29,7 +29,7 @@ from .errors import (
     strerror,
 )
 from ._route import build_unconnected_send, port_segment
-from .client import Client, PoolSpec
+from .client import Client, ParsedPath, PoolSpec
 from .tagdb import StructInfo, StructMember, Symbol, TagDB
 from .access import TagRequest
 from .identity import Identity
@@ -47,6 +47,7 @@ __all__ = [
     "Message",
     "ConnSpec",
     "PoolSpec",
+    "ParsedPath",
     "BpError",
     "BpGeneric",
     "BpSendRequest",

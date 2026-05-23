@@ -130,6 +130,47 @@ class Client:
         SDK's IPC handle alive across multiple sessions."""
         self._raw.call("OCXcip_Close", 0x78, timeout_ms=5000)
 
+    def parse_path(self, text: str) -> "ParsedPath":
+        """OCXcip_ParsePath: text path → encoded EPATH.
+
+        Wire: payload 0x288, text at slot+0x78, encoded bytes at
+        slot+0x180.. with the byte count at slot+0x280.
+
+        Returns a ParsedPath with the encoded bytes + parsed class/
+        instance/attribute.  Raises BpEngine(-101) on malformed text.
+        """
+        if not text:
+            raise BpNullArg("text is required")
+        if len(text) > 254:
+            raise BpParamRange("text > 254 bytes")
+        path_bytes = text.encode("ascii", "strict")
+        state: dict = {}
+
+        def fill(slot):
+            slot[0x078:0x078 + len(path_bytes)] = path_bytes
+            slot[0x078 + len(path_bytes)] = 0
+            struct.pack_into("<H", slot, 0x280, 256)
+
+        def read(slot):
+            n = struct.unpack_from("<H", slot, 0x280)[0]
+            if n > 256:
+                n = 256
+            state["encoded"] = bytes(slot[0x180:0x180 + n])
+            state["cip_class"] = struct.unpack_from("<H", slot, 0x178)[0]
+            state["segment_flags"] = slot[0x17A]
+            state["instance"] = struct.unpack_from("<I", slot, 0x17C)[0]
+            state["attr_flags"] = slot[0x282]
+
+        self._raw.call("OCXcip_ParsePath", 0x288,
+                       fill=fill, read=read, timeout_ms=5000)
+        return ParsedPath(
+            encoded=state["encoded"],
+            cip_class=state["cip_class"],
+            segment_flags=state["segment_flags"],
+            instance=state["instance"],
+            attr_flags=state["attr_flags"],
+        )
+
     def error_string(self, code: int) -> str:
         """OCXcip_ErrorString: fetch the engine-owned ASCII description
         for an arbitrary error code (positive engine codes, negative
@@ -894,6 +935,17 @@ class Client:
                 finally:
                     if pool.initialized:
                         pool.free.put(i)
+
+
+@dataclass
+class ParsedPath:
+    """Result of Client.parse_path (v0.10.0+).  Mirrors C
+    bp_parsed_path_t and Go ocxbp.ParsedPath."""
+    encoded: bytes = b""
+    cip_class: int = 0
+    segment_flags: int = 0
+    instance: int = 0
+    attr_flags: int = 0
 
 
 @dataclass

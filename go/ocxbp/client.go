@@ -106,6 +106,48 @@ func (c *Client) OpenSession() (uint32, error) {
 	return handle, translateCallErr(err)
 }
 
+// ParsedPath is the public result struct for Client.ParsePath.
+// Mirrors C bp_parsed_path_t.
+type ParsedPath struct {
+	Encoded       []byte // binary EPATH the engine generated
+	CIPClass      uint16
+	SegmentFlags  uint8
+	Instance      uint32
+	AttrFlags     uint8
+}
+
+// ParsePath dispatches OCXcip_ParsePath against `text` (OldI format,
+// e.g. "P:1,S:2,C:1,I:1,A:1") and returns the parsed result.  Use it
+// to validate path syntax at the SDK boundary instead of as a PLC-side
+// CIP rejection.  Returns an error wrapping engine code -101 on a
+// malformed path.
+func (c *Client) ParsePath(text string) (ParsedPath, error) {
+	if c == nil || text == "" {
+		return ParsedPath{}, ErrNullArg
+	}
+	if len(text) > 254 {
+		return ParsedPath{}, ErrParamRange
+	}
+	var raw cip.ParsePathResult
+	err := c.shm.Call(shm.CallSpec{
+		FnName:      cip.FnParsePath,
+		PayloadSize: cip.SizeParsePath,
+		Fill:        func(slot []byte) { cip.EncodeParsePath(slot, text, 256) },
+		Read:        func(slot []byte) { raw = cip.DecodeParsePath(slot) },
+		TimeoutMs:   5000,
+	})
+	if err != nil {
+		return ParsedPath{}, translateCallErr(err)
+	}
+	return ParsedPath{
+		Encoded:      raw.Encoded,
+		CIPClass:     raw.Class,
+		SegmentFlags: raw.SegFlags,
+		Instance:     raw.Instance,
+		AttrFlags:    raw.AttrFlags,
+	}, nil
+}
+
 // CloseSession dispatches OCXcip_Close to release the engine-side
 // session opened by OpenSession.  Client.Close calls this
 // automatically; explicit invocation is only needed if you want to

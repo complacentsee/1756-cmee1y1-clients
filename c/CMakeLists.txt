@@ -28,6 +28,7 @@ set(LIB_SOURCES
     src/route.c
     src/tagcache.c
     src/multitag.c
+    src/path.c
 )
 
 # Shared library
