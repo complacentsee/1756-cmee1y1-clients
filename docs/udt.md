@@ -190,6 +190,33 @@ data, handle, err := c.ReadStruct(slot /*P:1,S:N*/, "MyUDT_Tag", 600)
 err = c.WriteStruct(slot, "MyUDT_Tag", handle, data)
 ```
 
+C SDK (`bp_client_read_struct` / `bp_client_write_struct`):
+
+```c
+uint8_t  data[600];
+uint16_t data_len = 0, handle = 0;
+/* Read the whole UDT; the controller returns the 2-byte template handle. */
+bp_client_read_struct(c, slot /*N in P:1,S:N*/, "MyUDT_Tag",
+                      data, sizeof(data), &data_len, &handle);
+
+/* ...mutate data (use bp_tagdb_get_struct_member offsets)... */
+
+/* Write it back in one atomic transaction, echoing the handle. */
+bp_client_write_struct(c, slot, "MyUDT_Tag", handle, data, data_len);
+```
+
+Python SDK (`read_struct` / `write_struct`, also bound as `Client` methods):
+
+```python
+# Read the whole UDT; returns (payload, 2-byte template handle).
+data, handle = c.read_struct(slot, "MyUDT_Tag")   # slot = N in P:1,S:N
+
+# ...mutate data (use get_struct_member offsets)...
+
+# Write it back in one atomic transaction, echoing the handle.
+c.write_struct(slot, "MyUDT_Tag", handle, data)
+```
+
 Wire shapes (CIP request body = `[service, path_words, path, body]`):
 
 ```
@@ -200,9 +227,13 @@ Write Tag 0x4D: [0x4D][words][0x91 len name pad]
                 [0xA0 0x02][handle u16][elem_count u16=1][payload...]
 ```
 
-Verified on a live 1756-L8x (firmware 38.11): `ReadStruct` returns
-`handle=0x0A2C` for a 104-byte UDT (type 0x02A0); `WriteStruct` with
-that handle returns CIP general status 0 and round-trips byte-identical.
+Verified on a live 1756-L8x (firmware 38.11) in **all three SDKs**: the
+read returns `handle=0x0A2C` for a 104-byte UDT (type 0x02A0); the write
+with that handle returns CIP general status 0 and round-trips
+byte-identical. Each SDK ships a `structrwtest` validator
+(`go/cmd/structrwtest`, `c/examples/structrwtest.c`,
+`python/examples/structrwtest.py`) that performs this read → write-back →
+re-read byte-equality check against a live controller.
 
 > **The earlier 0x09 gotcha — resolved.** Sending a struct payload via
 > `AccessTagData` with `data_type=0x4527, elem_byte_size=byte_size`
