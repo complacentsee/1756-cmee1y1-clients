@@ -1366,3 +1366,14 @@ _bind_tag_cache_methods()
 
 # Re-import to avoid a circular ref at module top.
 from .tagdb import TagDB  # noqa: E402,F401
+
+# Bind the structured (whole-UDT) accessors onto Client.  struct.py
+# keeps them as module-level functions (taking the client as the first
+# arg) so they're unit-testable with a fake client without dragging in
+# the posix_ipc IPC layer; here we attach them as methods, mirroring
+# the Go (c *Client) ReadStruct / WriteStruct receivers.
+from .struct import read_struct as _read_struct  # noqa: E402
+from .struct import write_struct as _write_struct  # noqa: E402
+
+Client.read_struct = _read_struct
+Client.write_struct = _write_struct

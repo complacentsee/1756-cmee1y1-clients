@@ -292,6 +292,84 @@ typedef struct {
 int bp_client_message_send(bp_client_t *client, bp_message_t *msg);
 
 /* ============================================================
+ * Structured (whole-UDT) tag access — bp_client_read_struct /
+ *                                      bp_client_write_struct
+ *
+ * Reads / writes a whole Logix UDT ("structure") instance in ONE CIP
+ * transaction over the raw MessageSend (UCMM) path — atomic on the
+ * controller.  Uses CIP Read Tag (0x4C) / Write Tag (0x4D) with the
+ * 2-byte abbreviated-structure template handle (type code 0x02A0).
+ *
+ * Unlike the bp_tagdb_access family, this treats the UDT as one
+ * indivisible value rather than per-member scalars.  A structured
+ * Write Tag must carry the 2-byte structure-template handle the
+ * controller assigned; the controller hands that handle back in the
+ * reply to a structured Read Tag, so bp_client_read_struct returns it
+ * and bp_client_write_struct (or the caller, via a cached handle)
+ * supplies it back.
+ *
+ * Wire shapes (CIP request body — service, path_size_words, path, body):
+ *
+ *   Read Tag (0x4C):  [0x4C][words][0x91 len name pad][elem_count u16=1]
+ *     reply data:     [type u16 = 0x02A0][handle u16][payload...]
+ *
+ *   Write Tag (0x4D): [0x4D][words][0x91 len name pad]
+ *                     [0xA0 0x02][handle u16][elem_count u16=1][payload...]
+ *
+ * The symbolic path is an ANSI Extended Symbol Segment: 0x91, name
+ * length, name bytes, NUL pad to even length; size in 16-bit words.
+ *
+ * Limits: MessageSend is UCMM, so the assembled request must fit
+ * BP_MSG_MAX_REQ (500).  The SUF registers (~104 B) fit easily;
+ * larger UDTs would need a connected/fragmented path (future work).
+ * Over-cap writes return BP_ERR_PARAM_RANGE rather than truncate.
+ *
+ * `slot` is the controller's backplane slot (the N in "P:1,S:N").
+ * A non-zero CIP general_status returns BP_ERR_CIP_STATUS; fetch the
+ * structured fields with bp_client_last_cip_error().
+ * ============================================================ */
+
+/* StructTypeAbbrev — the CIP "abbreviated structure" type code that
+ * prefixes structured-tag data on the wire (0x02A0 = 0xA0 with the
+ * structured bit).  The 2-byte template handle follows it. */
+#define BP_STRUCT_TYPE_ABBREV 0x02A0u
+
+/* bp_client_read_struct
+ *   Reads a whole structured (UDT) tag in one CIP Read Tag transaction.
+ *   On success copies the raw struct payload into out_data (capped at
+ *   out_cap), writes the byte count to *out_len, and writes the
+ *   controller-assigned 2-byte template handle to *out_handle.  Pass
+ *   that handle to bp_client_write_struct to write the same UDT back.
+ *
+ *   out_cap also bounds the reply buffer: pass the struct's byte size
+ *   plus a little headroom (the reply adds a ~6-byte CIP header + the
+ *   4-byte type/handle prefix).  out_handle may be NULL if not needed.
+ *
+ *   Returns BP_OK on success; BP_ERR_NULL_ARG / BP_ERR_PARAM_RANGE on
+ *   bad arguments; BP_ERR_CIP_STATUS on a non-zero CIP general status
+ *   (details via bp_client_last_cip_error); negative rc on transport
+ *   errors. */
+int bp_client_read_struct(bp_client_t *client, uint8_t slot,
+                          const char *tag,
+                          void *out_data, uint16_t out_cap,
+                          uint16_t *out_len, uint16_t *out_handle);
+
+/* bp_client_write_struct
+ *   Writes a whole structured (UDT) tag in one CIP Write Tag
+ *   transaction — atomic on the controller.  `handle` is the 2-byte
+ *   template handle from bp_client_read_struct for this tag; `data` is
+ *   the full struct payload (exactly the struct's byte size,
+ *   controller-authoritative) of `data_len` bytes.
+ *
+ *   Returns BP_OK on success; BP_ERR_NULL_ARG / BP_ERR_PARAM_RANGE on
+ *   bad arguments or an over-cap request; BP_ERR_CIP_STATUS on a
+ *   non-zero CIP general status (details via bp_client_last_cip_error);
+ *   negative rc on transport errors. */
+int bp_client_write_struct(bp_client_t *client, uint8_t slot,
+                           const char *tag, uint16_t handle,
+                           const void *data, uint16_t data_len);
+
+/* ============================================================
  * CIP Identity / device queries
  * ============================================================ */
 

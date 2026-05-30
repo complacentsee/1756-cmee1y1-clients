@@ -22,6 +22,7 @@ set(LIB_SOURCES
     src/accessdb.c
     src/errors.c
     src/message.c
+    src/struct.c
     src/identity.c
     src/module.c
     src/conn.c
@@ -169,6 +170,12 @@ target_link_libraries(dummy PRIVATE bpclient pthread rt)
 add_executable(accessdbtest examples/accessdbtest.c)
 target_link_libraries(accessdbtest PRIVATE bpclient pthread rt)
 
+# Example: structrwtest — atomic whole-UDT read/write validator
+# (bp_client_read_struct / bp_client_write_struct, CIP 0x4C/0x4D over
+# MessageSend; --write round-trips the just-read bytes byte-identical).
+add_executable(structrwtest examples/structrwtest.c)
+target_link_libraries(structrwtest PRIVATE bpclient pthread rt)
+
 # Install
 include(GNUInstallDirs)
 install(TARGETS bpclient
@@ -203,4 +210,5 @@ install(TARGETS
             udtinfo
             dummy
             accessdbtest
+            structrwtest
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

@@ -39,6 +39,7 @@ from .access import TagRequest
 from .identity import Identity
 from .message import Message
 from .conn import ConnSpec
+from .struct import StructTypeAbbrev, read_struct, write_struct
 
 __all__ = [
     "Client",
@@ -72,6 +73,9 @@ __all__ = [
     "cip_status_message",
     "build_unconnected_send",
     "port_segment",
+    "read_struct",
+    "write_struct",
+    "StructTypeAbbrev",
     "strerror",
     "err_code",
 ]

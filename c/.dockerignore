@@ -1,0 +1,8 @@
+# Build artifacts must not enter the image context: a local CMake cache
+# (build/CMakeCache.txt) hardcodes this host's absolute source path, so
+# COPY . . would ship it into the container and break the container's
+# `cmake -B build` with a "source dir does not match" error.
+build/
+*.o
+*.so
+*.so.*
